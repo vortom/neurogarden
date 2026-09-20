@@ -32,11 +32,17 @@ src/neurogarden/
     config.py             Config dataclass, RULES_VERSION
     tiles.py              Terrain / Resource enums, text-map parser
     body.py               BodyConfig registry, Action enum, observation spec
-    senses.py             smell fields, vision, touch, body, env channels
     events.py             Event dataclass and event types
-    world.py              World: from_map, spawn, step, snapshot, restore, state_hash
-    replay.py             replay file read / write / verify
-    maps/drosoville.txt
+    clock.py              light, night and day number from the tick
+    state.py              Agent, WorldState (plain integer data)
+    fruit.py              fruit placement, rot, spawning
+    actions.py            apply one agent's action
+    metabolism.py         needs, health, death
+    senses.py             smell fields, vision, touch, body, env channels
+    snapshot.py           snapshot, restore, state hash
+    world.py              World facade: from_map, spawn, observe, step, snapshot, restore, state_hash
+    replay.py             record / verify replay data (callers do the file I/O)
+    maps/                 drosoville.txt and its loader
   dojo/
     env.py                NeuroGardenEnv (gymnasium.Env), registration, make()
     rewards.py            wellbeing, survival, homeostatic
@@ -133,9 +139,9 @@ Per agent, all integers: `id` (from 1), `body` (body config name), `x`, `y`,
 Needs (`satiety`, `hydration`, `energy`) and `health` live in `[0, 1000]`.
 **Health is a consequence, not a need:** needs → health → death.
 
-`World.spawn(body="fly", at=None)`: position `at`, else the nest tile, else the
-first free walkable tile in row-major order. Raises `ValueError` if the chosen
-tile is not walkable or is occupied. Initial values come from `Config`; initial
+`World.spawn(body="fly", at=None)`: position `at`; without `at`, the nest tile
+if it is free, else the first free walkable tile in row-major order. Raises
+`ValueError` if `at` is not walkable or is occupied, or if no tile is free. Initial values come from `Config`; initial
 facing is `S`.
 
 ### 3.6 Actions (body `fly`, frame `allocentric`)
@@ -206,7 +212,7 @@ All tunables live in one frozen `Config` dataclass, validated on construction
 | energy delta per action | `energy_idle=-1`, `energy_move=-2`, `energy_move_night=-4`, `energy_consume=-1`, `energy_rest=8`, `energy_rest_nest=12` |
 | feeding | `fruit_bites=4`, `fruit_bite_satiety=150`, `drink_hydration=150` |
 | health | `starve_damage=5`, `regen_threshold=300`, `regen_amount=1`, `max_age=None` |
-| time | `day_length=1200` (phases as in 3.4) |
+| time | `day_length=1200`, `dawn_end=100`, `dusk_start=700`, `night_start=800` (the phase boundaries of 3.4; ramps scale with them) |
 | vision | `vision_radius_day=3`, `vision_radius_night=1` |
 | smell | `smell_range_fruit=12`, `smell_range_humidity=10`, `smell_range_nest=16` |
 | fruit | `tree_radius=2`, `tree_max_fruit=3`, `tree_initial_fruit=2`, `fruit_spawn_permille=8`, `fruit_lifetime=1500` |
@@ -284,9 +290,11 @@ function may see). This keeps the agent stream free of world state.
   facing, satiety, hydration, energy, health, age, alive, bumped`.
 - **`RULES_VERSION`** (int, starts at 1) is bumped by any change that alters
   state evolution or observations for identical inputs.
-- **Replay file** (JSON): `rules_version`, config, map text, seed, spawns,
-  per-tick action lists, and `{tick: state_hash}` checkpoints.
-  `replay.verify(path)` re-runs it and compares hashes.
+- **Replay** (JSON-serialisable dict): `rules_version`, config, map text, seed,
+  spawns, per-tick action lists, and `{tick: state_hash}` checkpoints.
+  `replay.record(...)` builds one; `replay.verify(replay)` re-runs it and
+  raises `ReplayMismatch` at the first differing checkpoint. The engine stays
+  free of file I/O: callers read and write the JSON.
 
 ## 7. Dojo
 
@@ -349,7 +357,8 @@ class Brain(Protocol):
 ```
 
 Brains consume the raw channel dict — the same payload the network SDK will
-deliver in sub-project 2. `brains.base.run_episode(env, brain) -> EpisodeStats`.
+deliver in sub-project 2.
+`brains.base.run_episode(env, brain, seed=None) -> EpisodeStats`.
 
 - `RandomBrain`: uniform over the 7 actions, own seeded SplitMix64.
 - `ScriptedBrain`, first matching rule wins:
@@ -365,11 +374,15 @@ deliver in sub-project 2. `brains.base.run_episode(env, brain) -> EpisodeStats`.
   *explore* = persistent random walk that keeps its heading with
   `keep_heading_permille` and picks a new one on a bump. Constructor defaults:
   `hungry_below=600`, `thirsty_below=600`, `urgent_below=250`,
-  `tired_below=250`, `critical_energy=120`, `keep_heading_permille=800`;
-  tuned together with `Config` against the balance guard.
+  `tired_below=250`, `rested_above=700`, `critical_energy=120`,
+  `keep_heading_permille=800`, `explore_commit=25`; tuned together with
+  `Config` against the balance guard. `rested_above` gives rule 4 hysteresis
+  (a tired fly keeps resting until rested); `explore_commit` makes a fly that
+  is stuck behind water or a tree — scent passes, legs do not — explore for
+  that many ticks before following the scent again.
 
 `python -m neurogarden.dojo.watch --brain {random,scripted} --seed N --tps 10
-[--ascii]`: redraws the frame in place; emoji tiles (🪰 🍎 🌳 🏠 💧 🪨) with an
+--max-steps 12000 [--ascii]`: redraws the frame in place; emoji tiles (🪰 🍎 🌳 🏠 💧 🪨) with an
 ASCII fallback; HUD with day, tick, ☀️/🌙 and need bars.
 
 ## 9. Testing (test-first)
