@@ -1,7 +1,7 @@
 # Sub-project 2 — Protocol + Server + SDK
 
 Date: 2026-09-26
-Status: design approved in brainstorm; awaiting written-spec review.
+Status: approved; implemented on branch feat/protocol-server-sdk (2026-09-26). Section 11 lists what the implementation added beyond this design.
 Parent: `2026-09-20-neurogarden-architecture-design.md` (its section 2 decisions
 are binding). Builds on sub-project 1 (`2026-09-20-engine-dojo-design.md`).
 
@@ -33,31 +33,35 @@ src/neurogarden/
     __init__.py
     messages.py       pydantic v2 models: envelope, client → server, server → client
     catalog.py        body catalog built from engine constants (what a channel means)
-    schema.py         export_schema() -> dict; used by the drift test and a CLI
+    schema.py         export_schema() / schema_text(): the drift-tested artifact
+    mailbox.py        Mailbox: FIFO with latest-wins for observations and frames
+    codec.py          observation payloads <-> numpy channel dicts, via the catalog
   server/
     __init__.py
-    ports.py          AgentPort protocol, RemoteAgentPort, LocalAgentPort, SpectatorPort, Outbox
-    roster.py         owners, lineage counters, live flies, port ↔ agent id
+    names.py          fly names (deterministic, cute) and moods (thought bubbles)
+    roster.py         owners, lineage counters, live flies, port ↔ agent id, scores
+    chronicle.py      the naturalist's log: sentences from events
+    frames.py         builders for every server → client message
+    ports.py          Port protocol, RemotePort (agent or spectator), LocalPort (hosted brain)
     runner.py         WorldRunner: queued joins, pending actions, tick(), run(), logs
-    frames.py         observation / frame / died payload builders
     gateway.py        WebSocket handler: handshake, validation, dispatch, close codes
-    app.py            serve(): compose runner + gateway + NPCs; health endpoint
+    app.py            ServerConfig, Server (async context manager), serve(), NPC hatching
   sdk/
     __init__.py
-    codec.py          decode observation payloads into numpy channel dicts via the catalog
-    client.py         AsyncClient (asyncio)
+    client.py         AsyncClient (asyncio), Observation, Spectacle
     session.py        Session / Fly: sync facade on a background loop; run_brain()
-  dojo/render_ansi.py   refactor: render_view(View, …); render(world, …) builds a View
-  cli.py              `neurogarden` entry point: serve / join / watch
+  dojo/render_ansi.py   refactor: View + render_view(); render(world, …) builds a View
+  cli.py              `neurogarden` entry point: serve / join / watch / schema
 tests/
 ```
 
 New base dependencies: `websockets>=14` and `pydantic>=2.7`. No extras yet
 (nothing heavy). `[project.scripts] neurogarden = "neurogarden.cli:main"`.
 
-`engine/` is not changed by this sub-project except for additive, non-rule
-exports if the catalog needs a name that exists only as a literal today.
-`RULES_VERSION` stays 1.
+Engine change (the one rule change of this sub-project): default spawns hatch
+on the free walkable tile nearest the nest instead of the first free tile in
+row-major order, so a full nest no longer sends newcomers to a corner.
+`RULES_VERSION` becomes 2 and the golden replay is regenerated.
 
 ## 3. Protocol v1
 
@@ -360,3 +364,40 @@ localhost; a single shared token; no TLS; one body; no admin controls; the SDK
 does not reconnect by itself; frames are full state every tick (fine at
 32×24 and 5 tps, a diff format can be added additively); dead agents
 accumulate in the engine state until sub-project 4 adds `despawn`.
+
+## 11. What the implementation added (and where it deviates)
+
+Additions, all additive to the protocol above:
+
+- **Fly names.** Every life gets a deterministic two-word name from
+  `(owner, lineage)` — `joined.name`, `died.name`, `frame.agents[].name`.
+- **Moods.** `frame.agents[].mood` is one of `content, hungry, thirsty,
+  sleepy, desperate, dying, dead`, derived from the visible needs (never a
+  rule); the spectator draws it as a thought bubble (✨ 🍎 💧 💤 ❗ ☠️).
+- **`say`.** A client → server message (`text`, ≤ 40 chars) that shows as the
+  fly's speech bubble in frames — for brains that want to talk (LLM brains
+  later).
+- **Chronicle.** A `chronicle` server → spectator message: the naturalist's
+  log, plain sentences written by the server from events (hatchings, meals,
+  depletions, deaths, owners leaving and returning), with a compass sector
+  ("in the north-east"); the last 30 lines are replayed to a new spectator.
+- **Scores.** `frame.scores`: per owner, lives, best lifespan, alive — the
+  spectator's leaderboard.
+- **`welcome.motd`.**
+- **`neurogarden watch --follow OWNER`** highlights one owner's fly.
+- **`neurogarden serve` defaults to `--npc scripted:1`** (a resident fly), so
+  a fresh server is never an empty garden; `--npc none` for silence.
+
+Deviations from sections 2–6:
+
+- `codec` and the mailbox live in `protocol/`, not `sdk/` — the server's
+  hosted brains need them too.
+- One `RemotePort` class serves both roles; `LocalPort` is the hosted brain.
+- A `join` after `leave` re-attaches the same connection (no reconnect
+  needed).
+- The engine changed after all: the nest-adjacent spawn rule
+  (`RULES_VERSION` 2), because three NPC flies hatching in the map's corner
+  looked wrong on the first live run.
+- The implementation was written and tested as a whole (261 tests) and
+  committed in five reviewable steps rather than transcribed from a
+  code-carrying plan.
