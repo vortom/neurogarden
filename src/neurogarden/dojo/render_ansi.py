@@ -59,6 +59,8 @@ MOOD_ASCII = {
 }
 _BAR_WIDTH = 10
 _NEEDS = ("satiety", "hydration", "energy", "health")
+# Nothing a fly says may move the cursor or colour the terminal, whoever typed it.
+_CONTROL = dict.fromkeys(list(range(0x20)) + [0x7F])
 
 
 @dataclass
@@ -124,7 +126,8 @@ def _roster_line(agent: AgentGlimpse, focus: int | None, glyphs: dict, ascii: bo
     bars = " ".join(
         f"{need[0].upper()}{_bar(getattr(agent, need), glyphs['bar'])}" for need in _NEEDS
     )
-    bubble = f' "{agent.say}"' if agent.say else ""
+    said = agent.say.translate(_CONTROL)
+    bubble = f' "{said}"' if said else ""
     glyph = (MOOD_ASCII if ascii else MOOD_GLYPHS).get(agent.mood, "?")
     who = f"{marker}{agent.owner:<15} {agent.name:<14} #{agent.lineage:<2}"
     return f"{who} {bars} {glyph}{link}{bubble}"

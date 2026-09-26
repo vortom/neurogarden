@@ -16,17 +16,26 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 log = logging.getLogger("neurogarden.protocol")
 PROTOCOL_VERSION = 1
 OWNER_PATTERN = r"^[A-Za-z0-9_.-]{1,64}$"
+TEXT_PATTERN = r"^[^\x00-\x1f\x7f]*$"  # no control characters, no escape sequences
 SAY_MAX = 40
 
 
 class Model(BaseModel):
+    """Client → server: strict. The server never guesses what a client meant."""
+
     model_config = ConfigDict(extra="forbid")
+
+
+class OpenModel(BaseModel):
+    """Server → client: a newer server may add fields, and older clients ignore them."""
+
+    model_config = ConfigDict(extra="ignore")
 
 
 # --- catalog: what every number in an observation means ---------------------------------
 
 
-class ChannelInfo(Model):
+class ChannelInfo(OpenModel):
     shape: list[int]
     dtype: str
     low: int
@@ -37,15 +46,16 @@ class ChannelInfo(Model):
     north_up: bool | None = None
 
 
-class BodyInfo(Model):
+class BodyInfo(OpenModel):
     frame: str
     actions: list[str]
     channels: dict[str, ChannelInfo]
 
 
-class Catalog(Model):
+class Catalog(OpenModel):
     bodies: dict[str, BodyInfo]
     constants: dict[str, int]
+    events: dict[str, list[str]] = Field(default_factory=dict)  # event type -> its data keys
 
 
 # --- payloads: client -> server ----------------------------------------------------------
@@ -56,7 +66,7 @@ class Hello(Model):
     token: str = Field(min_length=1, max_length=256)
     owner: str = Field(pattern=OWNER_PATTERN)
     role: Literal["agent", "spectator"]
-    client: str = Field(default="", max_length=128)
+    client: str = Field(default="", max_length=128, pattern=TEXT_PATTERN)
 
 
 class Join(Model):
@@ -73,15 +83,15 @@ class Leave(Model):
 
 
 class Say(Model):
-    """A brain's thought bubble: free text spectators can see over the fly."""
+    """A brain's thought bubble: plain text spectators can see over the fly."""
 
-    text: str = Field(max_length=SAY_MAX)
+    text: str = Field(max_length=SAY_MAX, pattern=TEXT_PATTERN)
 
 
 # --- payloads: server -> client ----------------------------------------------------------
 
 
-class WorldInfo(Model):
+class WorldInfo(OpenModel):
     name: str
     width: int
     height: int
@@ -90,7 +100,7 @@ class WorldInfo(Model):
     rules_version: int
 
 
-class Welcome(Model):
+class Welcome(OpenModel):
     protocol: int
     owner: str
     role: Literal["agent", "spectator"]
@@ -99,7 +109,7 @@ class Welcome(Model):
     motd: str = ""
 
 
-class Joined(Model):
+class Joined(OpenModel):
     agent_id: int
     lineage: int
     name: str
@@ -107,7 +117,7 @@ class Joined(Model):
     reattached: bool
 
 
-class Channels(Model):
+class Channels(OpenModel):
     smell: list[list[int]]
     vision: list[list[list[int]]]
     touch: list[int]
@@ -115,12 +125,12 @@ class Channels(Model):
     env: list[int]
 
 
-class AgentEvent(Model):
+class AgentEvent(OpenModel):
     type: str
     data: dict[str, Any] = Field(default_factory=dict)
 
 
-class Observation(Model):
+class Observation(OpenModel):
     tick: int
     deadline_ms: int
     channels: Channels
@@ -128,7 +138,7 @@ class Observation(Model):
     missed: int
 
 
-class Stats(Model):
+class Stats(OpenModel):
     lifespan: int
     days: int
     death_causes: list[str]
@@ -140,7 +150,7 @@ class Stats(Model):
     mean_wellbeing: float
 
 
-class Died(Model):
+class Died(OpenModel):
     agent_id: int
     lineage: int
     name: str
@@ -149,14 +159,14 @@ class Died(Model):
     stats: Stats
 
 
-class WorldMap(Model):
+class WorldMap(OpenModel):
     map_name: str
     width: int
     height: int
     terrain: list[list[int]]
 
 
-class AgentView(Model):
+class AgentView(OpenModel):
     agent_id: int
     owner: str
     lineage: int
@@ -175,37 +185,46 @@ class AgentView(Model):
     say: str = ""
 
 
-class WorldEvent(Model):
+class WorldEvent(OpenModel):
     type: str
     agent_id: int | None
     data: dict[str, Any] = Field(default_factory=dict)
 
 
-class OwnerScore(Model):
+class OwnerScore(OpenModel):
     owner: str
     lives: int
     best_lifespan: int
     alive: bool
 
 
-class Frame(Model):
+class ResourceView(OpenModel):
+    """One thing worth eating or drinking, where a spectator can see it."""
+
+    x: int
+    y: int
+    kind: int
+    amount: int
+
+
+class Frame(OpenModel):
     tick: int
     day: int
     light: int
-    resources: list[list[int]]
+    resources: list[ResourceView]
     agents: list[AgentView]
     events: list[WorldEvent]
     scores: list[OwnerScore]
 
 
-class Chronicle(Model):
+class Chronicle(OpenModel):
     """One line of the naturalist's log, written by the server from what happened."""
 
     tick: int
     text: str
 
 
-class Error(Model):
+class Error(OpenModel):
     code: str
     message: str
     fatal: bool
@@ -214,71 +233,75 @@ class Error(Model):
 # --- envelopes ---------------------------------------------------------------------------
 
 
-class _Envelope(Model):
+class _ClientEnvelope(Model):
     v: Literal[1] = PROTOCOL_VERSION
 
 
-class HelloMessage(_Envelope):
+class _ServerEnvelope(OpenModel):
+    v: Literal[1] = PROTOCOL_VERSION
+
+
+class HelloMessage(_ClientEnvelope):
     type: Literal["hello"] = "hello"
     payload: Hello
 
 
-class JoinMessage(_Envelope):
+class JoinMessage(_ClientEnvelope):
     type: Literal["join"] = "join"
     payload: Join = Field(default_factory=Join)
 
 
-class ActionMessage(_Envelope):
+class ActionMessage(_ClientEnvelope):
     type: Literal["action"] = "action"
     payload: Action
 
 
-class LeaveMessage(_Envelope):
+class LeaveMessage(_ClientEnvelope):
     type: Literal["leave"] = "leave"
     payload: Leave = Field(default_factory=Leave)
 
 
-class SayMessage(_Envelope):
+class SayMessage(_ClientEnvelope):
     type: Literal["say"] = "say"
     payload: Say
 
 
-class WelcomeMessage(_Envelope):
+class WelcomeMessage(_ServerEnvelope):
     type: Literal["welcome"] = "welcome"
     payload: Welcome
 
 
-class JoinedMessage(_Envelope):
+class JoinedMessage(_ServerEnvelope):
     type: Literal["joined"] = "joined"
     payload: Joined
 
 
-class ObservationMessage(_Envelope):
+class ObservationMessage(_ServerEnvelope):
     type: Literal["observation"] = "observation"
     payload: Observation
 
 
-class DiedMessage(_Envelope):
+class DiedMessage(_ServerEnvelope):
     type: Literal["died"] = "died"
     payload: Died
 
 
-class WorldMessage(_Envelope):
+class WorldMessage(_ServerEnvelope):
     type: Literal["world"] = "world"
     payload: WorldMap
 
 
-class FrameMessage(_Envelope):
+class FrameMessage(_ServerEnvelope):
     type: Literal["frame"] = "frame"
     payload: Frame
 
 
-class ChronicleMessage(_Envelope):
+class ChronicleMessage(_ServerEnvelope):
     type: Literal["chronicle"] = "chronicle"
     payload: Chronicle
 
 
-class ErrorMessage(_Envelope):
+class ErrorMessage(_ServerEnvelope):
     type: Literal["error"] = "error"
     payload: Error
 

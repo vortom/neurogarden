@@ -27,6 +27,7 @@ from neurogarden.protocol.messages import (
     Observation,
     ObservationMessage,
     OwnerScore,
+    ResourceView,
     Stats,
     Welcome,
     WelcomeMessage,
@@ -128,7 +129,12 @@ def frame_message(
     state = world.state
     ys, xs = (state.resource_kind == Resource.FRUIT).nonzero()
     resources = [
-        [int(x), int(y), int(state.resource_kind[y, x]), int(state.resource_amount[y, x])]
+        ResourceView(
+            x=int(x),
+            y=int(y),
+            kind=int(state.resource_kind[y, x]),
+            amount=int(state.resource_amount[y, x]),
+        )
         for y, x in zip(ys.tolist(), xs.tolist(), strict=True)
     ]
     just_died = {event.agent_id for event in events if event.type == "died"}

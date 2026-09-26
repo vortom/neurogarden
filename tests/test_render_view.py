@@ -47,6 +47,14 @@ def test_roster_mode_lists_living_flies_with_bars_moods_and_chronicle():
     assert len(lines) == 8
 
 
+def test_a_speech_bubble_cannot_smuggle_escape_codes_into_the_terminal():
+    terrain = np.full((1, 1), 1, dtype=np.uint8)
+    shouty = AgentGlimpse(1, 0, 0, 900, 900, 900, 1000, True, "a", "B C", 1, True, "content")
+    shouty.say = "\x1b[2Jrun\x07"
+    line = render_view(View(terrain, [], [shouty], 0, 1, 1000), roster=True).splitlines()[-1]
+    assert line.endswith(' "[2Jrun"') and "\x1b" not in line and "\x07" not in line
+
+
 def test_emoji_roster_line_uses_mood_glyphs():
     terrain = np.full((1, 1), 1, dtype=np.uint8)
     agent = AgentGlimpse(1, 0, 0, 500, 900, 900, 1000, True, "a", "B C", 1, True, "hungry")

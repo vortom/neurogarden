@@ -233,7 +233,7 @@ def test_spectators_get_the_world_then_a_frame_per_tick_with_moods_and_scores():
     fly = frame.agents[0]
     assert (fly.owner, fly.lineage, fly.connected, fly.mood) == ("alice", 1, True, "content")
     assert frame.scores[0].owner == "alice" and frame.scores[0].alive
-    assert [r[2] for r in frame.resources] == [1]  # the map's F tile
+    assert [(r.x, r.y, r.kind) for r in frame.resources] == [(3, 1, 1)]  # the map's F tile
     runner.remove_spectator(watcher)
     runner.tick()
     assert watcher.last("frame").tick == 1

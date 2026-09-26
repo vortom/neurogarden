@@ -7,7 +7,9 @@ import json
 from .messages import PROTOCOL_VERSION, client_adapter, server_adapter
 
 REF_TEMPLATE = "#/$defs/{model}"
-SCHEMA_ID = "https://neurogarden.dev/protocol/v1/neurogarden.schema.json"
+SCHEMA_ID = (
+    "https://raw.githubusercontent.com/vortom/neurogarden/main/protocol/v1/neurogarden.schema.json"
+)
 
 
 def export_schema() -> dict:

@@ -3,7 +3,9 @@ from pathlib import Path
 
 import pytest
 
+from neurogarden.engine import World, maps
 from neurogarden.engine.body import observation_spec
+from neurogarden.engine.rng import SplitMix64
 from neurogarden.protocol import (
     PROTOCOL_VERSION,
     ProtocolError,
@@ -28,6 +30,17 @@ from neurogarden.protocol.messages import (
 )
 
 SCHEMA_FILE = Path(__file__).parent.parent / "protocol" / "v1" / "neurogarden.schema.json"
+SERVER_DEFS = (
+    "WelcomeMessage", "Welcome", "WorldInfo", "Catalog", "BodyInfo", "ChannelInfo",
+    "JoinedMessage", "Joined", "ObservationMessage", "Observation", "Channels", "AgentEvent",
+    "DiedMessage", "Died", "Stats", "WorldMessage", "WorldMap", "FrameMessage", "Frame",
+    "AgentView", "WorldEvent", "OwnerScore", "ResourceView", "ChronicleMessage", "Chronicle",
+    "ErrorMessage", "Error",
+)  # fmt: skip
+CLIENT_DEFS = (
+    "HelloMessage", "Hello", "JoinMessage", "Join", "ActionMessage", "Action",
+    "LeaveMessage", "Leave", "SayMessage", "Say",
+)  # fmt: skip
 
 
 def hello(**overrides):
@@ -78,6 +91,36 @@ def test_bad_frames_raise_protocol_error_with_a_code(text, code):
     assert err.value.code == code
 
 
+def test_a_server_message_may_grow_a_field_but_a_client_message_may_not():
+    grown = (
+        '{"v": 1, "type": "chronicle", "payload": '
+        '{"tick": 3, "text": "a fly hatches", "weather": "fine"}}'
+    )
+    message = decode_server(grown)
+    assert message.payload.text == "a fly hatches"  # the unknown field is simply ignored
+    with pytest.raises(ProtocolError) as err:
+        decode_client('{"v": 1, "type": "say", "payload": {"text": "hi", "loudly": true}}')
+    assert err.value.code == "malformed"
+
+
+def test_the_schema_says_which_side_may_grow_by_addition():
+    defs = export_schema()["$defs"]
+    for name in SERVER_DEFS:
+        assert defs[name].get("additionalProperties") is not False, name
+    for name in CLIENT_DEFS:
+        assert defs[name]["additionalProperties"] is False, name
+
+
+def test_text_from_a_client_carries_no_control_characters():
+    with pytest.raises(ValueError):
+        Say(text="\x1b[2Jcleared")
+    with pytest.raises(ValueError):
+        Say(text="two\nlines")
+    with pytest.raises(ValueError):
+        Hello(protocol=1, token="dev", owner="alice", role="agent", client="rogue\x07")
+    assert Say(text="fruit? 🍎").text == "fruit? 🍎"
+
+
 def test_owner_names_are_restricted():
     with pytest.raises(ValueError):
         Hello(protocol=1, token="dev", owner="", role="agent")
@@ -103,6 +146,31 @@ def test_catalog_matches_the_engine_observation_spec():
     assert vision.tables["terrain"]["nest"] == 5 and vision.tables["occupant"]["self"] == 1
     assert vision.centre == [3, 3] and vision.north_up is True
     assert build_catalog().constants["night_light_threshold"] == 500
+
+
+def test_the_catalog_lists_every_event_and_the_keys_a_fuzz_run_emits():
+    events = build_catalog().events
+    assert events["moved"] == ["from", "to", "direction"]
+    assert events["drank"] == []
+    seen = set()
+
+    def check(result):
+        for event in result.events:
+            assert event.type in events, event.type
+            assert set(event.data) <= set(events[event.type]), (event.type, event.data)
+            seen.add(event.type)
+
+    world = World.from_map(maps.load("drosoville"), seed=5)
+    flies = [world.spawn(), world.spawn()]
+    rng = SplitMix64(23)
+    for _ in range(1500):
+        check(world.step({fly: rng.randbelow(9) for fly in flies}))  # invalid ids included
+
+    larder = World.from_map("#####\n#F.~#\n#####")  # a meal and a drink a random walk misses
+    fly = larder.spawn()
+    for action in (4, 5, 2, 2, 5):  # west onto the fruit, eat, back east twice, drink
+        check(larder.step({fly: action}))
+    assert {"moved", "bumped", "ate", "drank", "died", "damaged"} <= seen
 
 
 def test_schema_is_a_2020_12_document_with_both_unions():

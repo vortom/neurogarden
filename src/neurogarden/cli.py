@@ -129,7 +129,7 @@ def frame_view(world, frame, chronicle: list[tuple[int, str]], lines: int = 6) -
     ]
     return View(
         terrain=np.array(world.terrain, dtype=np.uint8),
-        resources=[tuple(r) for r in frame.resources],
+        resources=[(r.x, r.y, r.kind, r.amount) for r in frame.resources],
         agents=agents,
         tick=frame.tick,
         day=frame.day,
