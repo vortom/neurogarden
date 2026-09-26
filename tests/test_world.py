@@ -1,3 +1,6 @@
+import dataclasses
+import json
+
 import numpy as np
 import pytest
 
@@ -156,7 +159,7 @@ def test_fuzz_invariants_hold_under_random_actions():
     flies = [world.spawn(), world.spawn()]
     rng = SplitMix64(17)
     for _ in range(1500):
-        world.step({fly: rng.randbelow(9) for fly in flies})  # includes invalid ids 7 and 8
+        result = world.step({fly: rng.randbelow(9) for fly in flies})  # includes invalid ids 7, 8
         state = world.state
         for agent in state.agents.values():
             for need in (agent.satiety, agent.hydration, agent.energy, agent.health):
@@ -167,3 +170,8 @@ def test_fuzz_invariants_hold_under_random_actions():
         assert int((state.occupant != 0).sum()) == len(state.living())
         assert (state.resource_amount >= 0).all()
         assert ((state.resource_kind == 0) == (state.resource_amount == 0)).all()
+        for agent_id, events in result.agent_events.items():
+            for event in events:
+                assert event.agent_id == agent_id
+                assert not ({"x", "y", "from", "to"} & set(event.data))
+        json.dumps([dataclasses.asdict(e) for e in result.events])  # what spectators/storage do

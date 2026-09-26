@@ -60,11 +60,22 @@ def test_hash_is_64_hex_characters_and_stable():
     [
         lambda s: setattr(s, "tick", 43),
         lambda s: s.rng.next_u64(),
+        lambda s: s.terrain.__setitem__((0, 0), 1),
+        lambda s: s.resource_kind.__setitem__((2, 2), 1),
         lambda s: s.resource_age.__setitem__((1, 1), 301),
         lambda s: s.resource_amount.__setitem__((1, 1), 2),
+        lambda s: s.occupant.__setitem__((2, 2), 5),
+        lambda s: setattr(s.agents[1], "x", 3),
+        lambda s: setattr(s.agents[1], "y", 2),
+        lambda s: setattr(s.agents[1], "facing", 0),
         lambda s: setattr(s.agents[1], "satiety", 649),
+        lambda s: setattr(s.agents[1], "alive", False),
+        lambda s: setattr(s.agents[1], "health", 989),
+        lambda s: setattr(s.agents[1], "age", 43),
         lambda s: setattr(s.agents[1], "bumped", False),
         lambda s: setattr(s, "next_agent_id", 3),
+        # body: BODIES has only one registered body ("fly"), so there is no second valid name
+        # to mutate agents[1].body to; get_body(...).index is still packed into the hash bytes.
     ],
 )
 def test_hash_covers_every_part_of_the_dynamic_state(mutate):
