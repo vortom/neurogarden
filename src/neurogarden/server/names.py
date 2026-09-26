@@ -1,4 +1,7 @@
-"""Fly names and moods: the small things that make a live world worth watching."""
+"""Fly names and moods: the small things that make a live world worth watching.
+
+The glyphs a mood is drawn with belong to the renderer (`dojo.render_ansi`), not here.
+"""
 
 from __future__ import annotations
 
@@ -37,23 +40,3 @@ def mood(satiety: int, hydration: int, energy: int, health: int, alive: bool) ->
     if lowest < 600:
         return lowest_name
     return "content"
-
-
-MOOD_GLYPHS = {
-    "content": "✨",
-    "hungry": "🍎",
-    "thirsty": "💧",
-    "sleepy": "💤",
-    "desperate": "❗",
-    "dying": "☠️",
-    "dead": "✝",
-}
-MOOD_ASCII = {
-    "content": "~",
-    "hungry": "f",
-    "thirsty": "w",
-    "sleepy": "z",
-    "desperate": "!",
-    "dying": "x",
-    "dead": "+",
-}

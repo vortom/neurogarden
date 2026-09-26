@@ -44,6 +44,9 @@ class Session:
     def close(self) -> None:
         if self._loop.is_closed():
             return
+        if not self._thread.is_alive():  # never entered, or already unwound: nothing to wait for
+            self._loop.close()
+            return
         try:
             self._run(self._client.close())
         finally:

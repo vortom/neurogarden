@@ -26,8 +26,12 @@ class Mailbox:
         self._wakeup.set()
 
     def close(self, error: BaseException | None = None) -> None:
-        """Wake readers; get() raises `error` (or returns None) once the queue is drained."""
-        self._closed = error if error is not None else _Closed()
+        """Wake readers; get() raises `error` (or returns None) once the queue is drained.
+
+        The first close wins: a later plain close cannot hide why the stream really ended.
+        """
+        if self._closed is None:
+            self._closed = error if error is not None else _Closed()
         self._wakeup.set()
 
     async def get(self):

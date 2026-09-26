@@ -321,15 +321,48 @@ def test_silence_after_connecting_is_closed_with_hello_required():
     assert run(scenario()) == 4003
 
 
-def test_wrong_token_raises_server_error_in_the_sdk():
+def test_wrong_token_raises_server_error_in_the_sdk_and_leaves_no_socket_open():
     async def scenario():
         async with Server(ServerConfig(**FAST)) as server:
+            client = AsyncClient(server.url, owner="alice", token="nope")
             with pytest.raises(ServerError) as err:
-                async with AsyncClient(server.url, owner="alice", token="nope"):
+                async with client:
                     pass
             assert err.value.code == "unauthorized"
+            assert client._connection is None
 
     run(scenario())
+
+
+def test_closing_the_client_wakes_whoever_waits_for_an_observation():
+    async def scenario():
+        async with Server(ServerConfig(**{**FAST, "tps": 2.0})) as server:
+            client = await AsyncClient(server.url, owner="alice").__aenter__()
+            await client.join()
+            await client.next_observation()  # the birth tick; the next is half a second away
+            waiting = asyncio.create_task(client.next_observation())
+            await asyncio.sleep(0.05)
+            await client.close()
+            with pytest.raises(ConnectionLost):
+                await asyncio.wait_for(waiting, timeout=1)
+
+    run(scenario())
+
+
+def test_a_spectator_keeps_only_the_recent_chronicle():
+    from neurogarden.sdk.client import CHRONICLE_MAX, Spectacle
+
+    spectacle = Spectacle()
+    for tick in range(CHRONICLE_MAX + 50):
+        spectacle.chronicle.append((tick, f"line {tick}"))
+    assert len(spectacle.chronicle) == CHRONICLE_MAX
+    assert spectacle.chronicle[-1] == (CHRONICLE_MAX + 49, f"line {CHRONICLE_MAX + 49}")
+
+
+def test_a_session_closed_before_it_was_entered_does_not_block():
+    session = Session("ws://127.0.0.1:1", owner="alice")
+    session.close()  # no thread was ever started: nothing to wait for
+    session.close()  # and closing twice is harmless
 
 
 def test_health_endpoint_answers_plain_http():

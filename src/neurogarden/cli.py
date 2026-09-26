@@ -11,11 +11,18 @@ import numpy as np
 
 from neurogarden.brains import BRAINS
 from neurogarden.dojo.render_ansi import AgentGlimpse, View, render_view
-from neurogarden.protocol import schema_text
-from neurogarden.sdk import DEFAULT_URL, AsyncClient, ConnectionLost, run_brain
+from neurogarden.protocol import ProtocolError, schema_text
+from neurogarden.sdk import DEFAULT_URL, AsyncClient, ConnectionLost, ServerError, run_brain
 from neurogarden.server import ServerConfig, parse_npc, serve
 
 _HOME_AND_CLEAR = "\x1b[H\x1b[2J"
+# Everything that means "this world would not have us": one line on stderr, exit 1.
+_REFUSALS = (ServerError, ProtocolError, ConnectionLost, ValueError)
+
+
+def _refuse(err: Exception) -> int:
+    print(f"neurogarden: {err}", file=sys.stderr)
+    return 1
 
 
 def _add_connection_args(parser: argparse.ArgumentParser) -> None:
@@ -62,24 +69,32 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def banner(server) -> None:
+    """Printed once the world is up, so `--port 0` announces the port it really bound."""
+    url = server.url
+    print(f"NeuroGarden — {server.config.map} (seed {server.config.seed}) on {url}")
+    print(f"join:  neurogarden join --owner you --brain scripted --url {url}")
+    print(f"watch: neurogarden watch --url {url}")
+
+
 def cmd_serve(args) -> int:
-    npcs = [parse_npc(spec) for spec in (args.npc or ["scripted:1"])]
-    config = ServerConfig(
-        map=args.map,
-        seed=args.seed,
-        tps=args.tps,
-        host=args.host,
-        port=args.port,
-        token=args.token,
-        npcs=[npc for npc in npcs if npc[0] != "none"],
-        hello_timeout=args.hello_timeout,
-    )
-    print(f"NeuroGarden — {config.map} (seed {config.seed}) on ws://{config.host}:{config.port}")
-    print(
-        f"join:  neurogarden join --owner you --brain scripted --url ws://{config.host}:{config.port}"
-    )
-    print(f"watch: neurogarden watch --url ws://{config.host}:{config.port}")
-    asyncio.run(serve(config))
+    try:
+        npcs = [parse_npc(spec) for spec in (args.npc or ["scripted:1"])]
+        config = ServerConfig(
+            map=args.map,
+            seed=args.seed,
+            tps=args.tps,
+            host=args.host,
+            port=args.port,
+            token=args.token,
+            npcs=[npc for npc in npcs if npc[0] != "none"],
+            hello_timeout=args.hello_timeout,
+        )
+        asyncio.run(serve(config, on_ready=banner))
+    except ValueError as err:
+        return _refuse(err)
+    except KeyboardInterrupt:
+        pass
     return 0
 
 
@@ -98,15 +113,14 @@ def cmd_join(args) -> int:
         run_brain(
             args.url, brain, owner=args.owner, token=args.token, lives=args.lives, on_life=report
         )
-    except ConnectionLost as lost:
-        print(f"connection lost: {lost}", file=sys.stderr)
-        return 1
+    except _REFUSALS as err:
+        return _refuse(err)
     except KeyboardInterrupt:
         pass
     return 0
 
 
-def frame_view(world, frame, chronicle: list[tuple[int, str]], lines: int = 6) -> View:
+def frame_view(world, frame, chronicle, lines: int = 6) -> View:
     """A renderer View from what a spectator was sent."""
     agents = [
         AgentGlimpse(
@@ -134,7 +148,7 @@ def frame_view(world, frame, chronicle: list[tuple[int, str]], lines: int = 6) -
         tick=frame.tick,
         day=frame.day,
         light=frame.light,
-        chronicle=[text for _, text in chronicle[-lines:]],
+        chronicle=[text for _, text in list(chronicle)[-lines:]],
     )
 
 
@@ -152,7 +166,9 @@ async def _watch(args) -> int:
             if client.spectacle.world is None:
                 continue
             view = frame_view(client.spectacle.world, frame, client.spectacle.chronicle)
-            focus = next((a.agent_id for a in frame.agents if a.owner == args.follow), None)
+            focus = next(
+                (a.agent_id for a in frame.agents if a.owner == args.follow and a.alive), None
+            )
             text = render_view(view, focus=focus, ascii=args.ascii, roster=True)
             sys.stdout.write(f"{_HOME_AND_CLEAR}{text}\n  best: {scoreboard(frame)}\n")
             sys.stdout.flush()
@@ -165,9 +181,8 @@ async def _watch(args) -> int:
 def cmd_watch(args) -> int:
     try:
         return asyncio.run(_watch(args))
-    except ConnectionLost as lost:
-        print(f"connection lost: {lost}", file=sys.stderr)
-        return 1
+    except _REFUSALS as err:
+        return _refuse(err)
     except KeyboardInterrupt:
         return 0
 

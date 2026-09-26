@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -36,6 +37,7 @@ from neurogarden.protocol.messages import (
 )
 
 DEFAULT_URL = "ws://127.0.0.1:8765"
+CHRONICLE_MAX = 200  # lines a spectator keeps; a day-long watch must not grow without end
 
 
 class ConnectionLost(ConnectionError):
@@ -66,7 +68,7 @@ class Spectacle:
 
     world: WorldMap | None = None
     frame: Frame | None = None
-    chronicle: list[tuple[int, str]] = field(default_factory=list)
+    chronicle: deque[tuple[int, str]] = field(default_factory=lambda: deque(maxlen=CHRONICLE_MAX))
 
 
 class AsyncClient:
@@ -107,11 +109,15 @@ class AsyncClient:
             role=self.role,
             client=self.client,
         )
-        await self._connection.send(encode(HelloMessage(payload=hello)))
-        first = await self._recv_one()
-        if first is None or first.type != "welcome":
-            got = getattr(first, "type", None)
-            raise ProtocolError("malformed", f"expected welcome, got {got}")
+        try:
+            await self._connection.send(encode(HelloMessage(payload=hello)))
+            first = await self._recv_one()
+            if first is None or first.type != "welcome":
+                got = getattr(first, "type", None)
+                raise ProtocolError("malformed", f"expected welcome, got {got}")
+        except BaseException:
+            await self.close()  # a refused handshake leaves no socket open
+            raise
         self.welcome = first.payload
         self._reader = asyncio.get_running_loop().create_task(self._read_loop())
         return self
@@ -123,9 +129,10 @@ class AsyncClient:
         if self._reader is not None:
             self._reader.cancel()
             self._reader = None
+        self._inbox.close()  # whoever waits for an observation or a frame is let go
         if self._connection is not None:
-            await self._connection.close()
-            self._connection = None
+            connection, self._connection = self._connection, None
+            await connection.close()
 
     @property
     def body(self) -> BodyInfo:
@@ -143,6 +150,7 @@ class AsyncClient:
         return message
 
     async def _read_loop(self) -> None:
+        ended: BaseException | None = None
         try:
             while True:
                 message = await self._recv_one()
@@ -168,10 +176,12 @@ class AsyncClient:
                 else:
                     self._inbox.put(message)
         except (ConnectionLost, ServerError, ProtocolError) as err:
-            self._inbox.close(err)
+            ended = err
+        finally:  # cancelled too: nobody may be left waiting on a stream that has stopped
+            self._inbox.close(ended)
             for waiter in self._joined_waiters:
                 if not waiter.done():
-                    waiter.set_exception(err)
+                    waiter.set_exception(ended or ConnectionLost(None, "client closed"))
             self._joined_waiters.clear()
 
     # --- agent API ---------------------------------------------------------------------
