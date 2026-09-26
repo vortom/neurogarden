@@ -7,7 +7,12 @@ requires-python = ">=3.12"
 dependencies = [
     "numpy>=2.1",
     "gymnasium>=1.0",
+    "websockets>=14",
+    "pydantic>=2.7",
 ]
+
+[project.scripts]
+neurogarden = "neurogarden.cli:main"
 
 [dependency-groups]
 dev = [
