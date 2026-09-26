@@ -1,0 +1,1249 @@
+{
+  "$defs": {
+    "Action": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "minimum": 0,
+          "title": "Action",
+          "type": "integer"
+        },
+        "tick": {
+          "minimum": 0,
+          "title": "Tick",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "tick",
+        "action"
+      ],
+      "title": "Action",
+      "type": "object"
+    },
+    "ActionMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/Action"
+        },
+        "type": {
+          "const": "action",
+          "default": "action",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "title": "ActionMessage",
+      "type": "object"
+    },
+    "AgentEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "title": "Data",
+          "type": "object"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "AgentEvent",
+      "type": "object"
+    },
+    "AgentView": {
+      "additionalProperties": false,
+      "properties": {
+        "age": {
+          "title": "Age",
+          "type": "integer"
+        },
+        "agent_id": {
+          "title": "Agent Id",
+          "type": "integer"
+        },
+        "alive": {
+          "title": "Alive",
+          "type": "boolean"
+        },
+        "connected": {
+          "title": "Connected",
+          "type": "boolean"
+        },
+        "energy": {
+          "title": "Energy",
+          "type": "integer"
+        },
+        "facing": {
+          "title": "Facing",
+          "type": "integer"
+        },
+        "health": {
+          "title": "Health",
+          "type": "integer"
+        },
+        "hydration": {
+          "title": "Hydration",
+          "type": "integer"
+        },
+        "lineage": {
+          "title": "Lineage",
+          "type": "integer"
+        },
+        "mood": {
+          "title": "Mood",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "owner": {
+          "title": "Owner",
+          "type": "string"
+        },
+        "satiety": {
+          "title": "Satiety",
+          "type": "integer"
+        },
+        "say": {
+          "default": "",
+          "title": "Say",
+          "type": "string"
+        },
+        "x": {
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "title": "Y",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "agent_id",
+        "owner",
+        "lineage",
+        "name",
+        "x",
+        "y",
+        "facing",
+        "satiety",
+        "hydration",
+        "energy",
+        "health",
+        "age",
+        "alive",
+        "connected",
+        "mood"
+      ],
+      "title": "AgentView",
+      "type": "object"
+    },
+    "BodyInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Actions",
+          "type": "array"
+        },
+        "channels": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ChannelInfo"
+          },
+          "title": "Channels",
+          "type": "object"
+        },
+        "frame": {
+          "title": "Frame",
+          "type": "string"
+        }
+      },
+      "required": [
+        "frame",
+        "actions",
+        "channels"
+      ],
+      "title": "BodyInfo",
+      "type": "object"
+    },
+    "Catalog": {
+      "additionalProperties": false,
+      "properties": {
+        "bodies": {
+          "additionalProperties": {
+            "$ref": "#/$defs/BodyInfo"
+          },
+          "title": "Bodies",
+          "type": "object"
+        },
+        "constants": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Constants",
+          "type": "object"
+        }
+      },
+      "required": [
+        "bodies",
+        "constants"
+      ],
+      "title": "Catalog",
+      "type": "object"
+    },
+    "ChannelInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "axes": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Axes",
+          "type": "object"
+        },
+        "centre": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Centre"
+        },
+        "dtype": {
+          "title": "Dtype",
+          "type": "string"
+        },
+        "high": {
+          "title": "High",
+          "type": "integer"
+        },
+        "low": {
+          "title": "Low",
+          "type": "integer"
+        },
+        "north_up": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "North Up"
+        },
+        "shape": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Shape",
+          "type": "array"
+        },
+        "tables": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "title": "Tables",
+          "type": "object"
+        }
+      },
+      "required": [
+        "shape",
+        "dtype",
+        "low",
+        "high"
+      ],
+      "title": "ChannelInfo",
+      "type": "object"
+    },
+    "Channels": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Body",
+          "type": "array"
+        },
+        "env": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Env",
+          "type": "array"
+        },
+        "smell": {
+          "items": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "title": "Smell",
+          "type": "array"
+        },
+        "touch": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Touch",
+          "type": "array"
+        },
+        "vision": {
+          "items": {
+            "items": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "title": "Vision",
+          "type": "array"
+        }
+      },
+      "required": [
+        "smell",
+        "vision",
+        "touch",
+        "body",
+        "env"
+      ],
+      "title": "Channels",
+      "type": "object"
+    },
+    "Chronicle": {
+      "additionalProperties": false,
+      "description": "One line of the naturalist's log, written by the server from what happened.",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "tick": {
+          "title": "Tick",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "tick",
+        "text"
+      ],
+      "title": "Chronicle",
+      "type": "object"
+    },
+    "ChronicleMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/Chronicle"
+        },
+        "type": {
+          "const": "chronicle",
+          "default": "chronicle",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "title": "ChronicleMessage",
+      "type": "object"
+    },
+    "ClientMessage": {
+      "discriminator": {
+        "mapping": {
+          "action": "#/$defs/ActionMessage",
+          "hello": "#/$defs/HelloMessage",
+          "join": "#/$defs/JoinMessage",
+          "leave": "#/$defs/LeaveMessage",
+          "say": "#/$defs/SayMessage"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/HelloMessage"
+        },
+        {
+          "$ref": "#/$defs/JoinMessage"
+        },
+        {
+          "$ref": "#/$defs/ActionMessage"
+        },
+        {
+          "$ref": "#/$defs/LeaveMessage"
+        },
+        {
+          "$ref": "#/$defs/SayMessage"
+        }
+      ]
+    },
+    "Died": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "title": "Agent Id",
+          "type": "integer"
+        },
+        "causes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Causes",
+          "type": "array"
+        },
+        "lineage": {
+          "title": "Lineage",
+          "type": "integer"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "stats": {
+          "$ref": "#/$defs/Stats"
+        },
+        "tick": {
+          "title": "Tick",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "agent_id",
+        "lineage",
+        "name",
+        "tick",
+        "causes",
+        "stats"
+      ],
+      "title": "Died",
+      "type": "object"
+    },
+    "DiedMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/Died"
+        },
+        "type": {
+          "const": "died",
+          "default": "died",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "title": "DiedMessage",
+      "type": "object"
+    },
+    "Error": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "fatal": {
+          "title": "Fatal",
+          "type": "boolean"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "fatal"
+      ],
+      "title": "Error",
+      "type": "object"
+    },
+    "ErrorMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/Error"
+        },
+        "type": {
+          "const": "error",
+          "default": "error",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "title": "ErrorMessage",
+      "type": "object"
+    },
+    "Frame": {
+      "additionalProperties": false,
+      "properties": {
+        "agents": {
+          "items": {
+            "$ref": "#/$defs/AgentView"
+          },
+          "title": "Agents",
+          "type": "array"
+        },
+        "day": {
+          "title": "Day",
+          "type": "integer"
+        },
+        "events": {
+          "items": {
+            "$ref": "#/$defs/WorldEvent"
+          },
+          "title": "Events",
+          "type": "array"
+        },
+        "light": {
+          "title": "Light",
+          "type": "integer"
+        },
+        "resources": {
+          "items": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "title": "Resources",
+          "type": "array"
+        },
+        "scores": {
+          "items": {
+            "$ref": "#/$defs/OwnerScore"
+          },
+          "title": "Scores",
+          "type": "array"
+        },
+        "tick": {
+          "title": "Tick",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "tick",
+        "day",
+        "light",
+        "resources",
+        "agents",
+        "events",
+        "scores"
+      ],
+      "title": "Frame",
+      "type": "object"
+    },
+    "FrameMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/Frame"
+        },
+        "type": {
+          "const": "frame",
+          "default": "frame",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "title": "FrameMessage",
+      "type": "object"
+    },
+    "Hello": {
+      "additionalProperties": false,
+      "properties": {
+        "client": {
+          "default": "",
+          "maxLength": 128,
+          "title": "Client",
+          "type": "string"
+        },
+        "owner": {
+          "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+          "title": "Owner",
+          "type": "string"
+        },
+        "protocol": {
+          "title": "Protocol",
+          "type": "integer"
+        },
+        "role": {
+          "enum": [
+            "agent",
+            "spectator"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "token": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Token",
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocol",
+        "token",
+        "owner",
+        "role"
+      ],
+      "title": "Hello",
+      "type": "object"
+    },
+    "HelloMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/Hello"
+        },
+        "type": {
+          "const": "hello",
+          "default": "hello",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "title": "HelloMessage",
+      "type": "object"
+    },
+    "Join": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "const": "fly",
+          "default": "fly",
+          "title": "Body",
+          "type": "string"
+        }
+      },
+      "title": "Join",
+      "type": "object"
+    },
+    "JoinMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/Join"
+        },
+        "type": {
+          "const": "join",
+          "default": "join",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        }
+      },
+      "title": "JoinMessage",
+      "type": "object"
+    },
+    "Joined": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "title": "Agent Id",
+          "type": "integer"
+        },
+        "lineage": {
+          "title": "Lineage",
+          "type": "integer"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "reattached": {
+          "title": "Reattached",
+          "type": "boolean"
+        },
+        "tick": {
+          "title": "Tick",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "agent_id",
+        "lineage",
+        "name",
+        "tick",
+        "reattached"
+      ],
+      "title": "Joined",
+      "type": "object"
+    },
+    "JoinedMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/Joined"
+        },
+        "type": {
+          "const": "joined",
+          "default": "joined",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "title": "JoinedMessage",
+      "type": "object"
+    },
+    "Leave": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "Leave",
+      "type": "object"
+    },
+    "LeaveMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/Leave"
+        },
+        "type": {
+          "const": "leave",
+          "default": "leave",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        }
+      },
+      "title": "LeaveMessage",
+      "type": "object"
+    },
+    "Observation": {
+      "additionalProperties": false,
+      "properties": {
+        "channels": {
+          "$ref": "#/$defs/Channels"
+        },
+        "deadline_ms": {
+          "title": "Deadline Ms",
+          "type": "integer"
+        },
+        "events": {
+          "items": {
+            "$ref": "#/$defs/AgentEvent"
+          },
+          "title": "Events",
+          "type": "array"
+        },
+        "missed": {
+          "title": "Missed",
+          "type": "integer"
+        },
+        "tick": {
+          "title": "Tick",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "tick",
+        "deadline_ms",
+        "channels",
+        "events",
+        "missed"
+      ],
+      "title": "Observation",
+      "type": "object"
+    },
+    "ObservationMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/Observation"
+        },
+        "type": {
+          "const": "observation",
+          "default": "observation",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "title": "ObservationMessage",
+      "type": "object"
+    },
+    "OwnerScore": {
+      "additionalProperties": false,
+      "properties": {
+        "alive": {
+          "title": "Alive",
+          "type": "boolean"
+        },
+        "best_lifespan": {
+          "title": "Best Lifespan",
+          "type": "integer"
+        },
+        "lives": {
+          "title": "Lives",
+          "type": "integer"
+        },
+        "owner": {
+          "title": "Owner",
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner",
+        "lives",
+        "best_lifespan",
+        "alive"
+      ],
+      "title": "OwnerScore",
+      "type": "object"
+    },
+    "Say": {
+      "additionalProperties": false,
+      "description": "A brain's thought bubble: free text spectators can see over the fly.",
+      "properties": {
+        "text": {
+          "maxLength": 40,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "Say",
+      "type": "object"
+    },
+    "SayMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/Say"
+        },
+        "type": {
+          "const": "say",
+          "default": "say",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "title": "SayMessage",
+      "type": "object"
+    },
+    "ServerMessage": {
+      "discriminator": {
+        "mapping": {
+          "chronicle": "#/$defs/ChronicleMessage",
+          "died": "#/$defs/DiedMessage",
+          "error": "#/$defs/ErrorMessage",
+          "frame": "#/$defs/FrameMessage",
+          "joined": "#/$defs/JoinedMessage",
+          "observation": "#/$defs/ObservationMessage",
+          "welcome": "#/$defs/WelcomeMessage",
+          "world": "#/$defs/WorldMessage"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/WelcomeMessage"
+        },
+        {
+          "$ref": "#/$defs/JoinedMessage"
+        },
+        {
+          "$ref": "#/$defs/ObservationMessage"
+        },
+        {
+          "$ref": "#/$defs/DiedMessage"
+        },
+        {
+          "$ref": "#/$defs/WorldMessage"
+        },
+        {
+          "$ref": "#/$defs/FrameMessage"
+        },
+        {
+          "$ref": "#/$defs/ChronicleMessage"
+        },
+        {
+          "$ref": "#/$defs/ErrorMessage"
+        }
+      ]
+    },
+    "Stats": {
+      "additionalProperties": false,
+      "properties": {
+        "bites": {
+          "title": "Bites",
+          "type": "integer"
+        },
+        "bumps": {
+          "title": "Bumps",
+          "type": "integer"
+        },
+        "days": {
+          "title": "Days",
+          "type": "integer"
+        },
+        "death_causes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Death Causes",
+          "type": "array"
+        },
+        "drinks": {
+          "title": "Drinks",
+          "type": "integer"
+        },
+        "lifespan": {
+          "title": "Lifespan",
+          "type": "integer"
+        },
+        "mean_wellbeing": {
+          "title": "Mean Wellbeing",
+          "type": "number"
+        },
+        "rest_ticks": {
+          "title": "Rest Ticks",
+          "type": "integer"
+        },
+        "tiles_explored": {
+          "title": "Tiles Explored",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "lifespan",
+        "days",
+        "death_causes",
+        "bites",
+        "drinks",
+        "rest_ticks",
+        "bumps",
+        "tiles_explored",
+        "mean_wellbeing"
+      ],
+      "title": "Stats",
+      "type": "object"
+    },
+    "Welcome": {
+      "additionalProperties": false,
+      "properties": {
+        "catalog": {
+          "$ref": "#/$defs/Catalog"
+        },
+        "motd": {
+          "default": "",
+          "title": "Motd",
+          "type": "string"
+        },
+        "owner": {
+          "title": "Owner",
+          "type": "string"
+        },
+        "protocol": {
+          "title": "Protocol",
+          "type": "integer"
+        },
+        "role": {
+          "enum": [
+            "agent",
+            "spectator"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "world": {
+          "$ref": "#/$defs/WorldInfo"
+        }
+      },
+      "required": [
+        "protocol",
+        "owner",
+        "role",
+        "world",
+        "catalog"
+      ],
+      "title": "Welcome",
+      "type": "object"
+    },
+    "WelcomeMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/Welcome"
+        },
+        "type": {
+          "const": "welcome",
+          "default": "welcome",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "title": "WelcomeMessage",
+      "type": "object"
+    },
+    "WorldEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Agent Id"
+        },
+        "data": {
+          "additionalProperties": true,
+          "title": "Data",
+          "type": "object"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "agent_id"
+      ],
+      "title": "WorldEvent",
+      "type": "object"
+    },
+    "WorldInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "day_length": {
+          "title": "Day Length",
+          "type": "integer"
+        },
+        "height": {
+          "title": "Height",
+          "type": "integer"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "rules_version": {
+          "title": "Rules Version",
+          "type": "integer"
+        },
+        "tps": {
+          "title": "Tps",
+          "type": "number"
+        },
+        "width": {
+          "title": "Width",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "width",
+        "height",
+        "tps",
+        "day_length",
+        "rules_version"
+      ],
+      "title": "WorldInfo",
+      "type": "object"
+    },
+    "WorldMap": {
+      "additionalProperties": false,
+      "properties": {
+        "height": {
+          "title": "Height",
+          "type": "integer"
+        },
+        "map_name": {
+          "title": "Map Name",
+          "type": "string"
+        },
+        "terrain": {
+          "items": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "title": "Terrain",
+          "type": "array"
+        },
+        "width": {
+          "title": "Width",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "map_name",
+        "width",
+        "height",
+        "terrain"
+      ],
+      "title": "WorldMap",
+      "type": "object"
+    },
+    "WorldMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/WorldMap"
+        },
+        "type": {
+          "const": "world",
+          "default": "world",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "title": "WorldMessage",
+      "type": "object"
+    }
+  },
+  "$id": "https://neurogarden.dev/protocol/v1/neurogarden.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Envelope {v, type, payload}; unknown types are ignored by receivers.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ClientMessage"
+    },
+    {
+      "$ref": "#/$defs/ServerMessage"
+    }
+  ],
+  "title": "NeuroGarden protocol v1"
+}
