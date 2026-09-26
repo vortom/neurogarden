@@ -11,14 +11,13 @@ from websockets.exceptions import ConnectionClosed
 
 from neurogarden.protocol.messages import (
     PROTOCOL_VERSION,
-    Error,
-    ErrorMessage,
     ProtocolError,
     decode_client,
     encode,
 )
 
-from .ports import RemotePort
+from .frames import error_message
+from .ports import CLOSE_REASON_MAX, RemotePort
 from .runner import WorldRunner
 
 log = logging.getLogger("neurogarden.server")
@@ -50,12 +49,12 @@ class Gateway:
         self.hello_timeout = hello_timeout
 
     async def _fail(self, connection, code: str, message: str) -> None:
-        payload = Error(code=code, message=message, fatal=True)
+        """The full story goes in the error payload; the close reason is what fits in a frame."""
         try:
-            await connection.send(encode(ErrorMessage(payload=payload)))
+            await connection.send(encode(error_message(code, message, fatal=True)))
         except ConnectionClosed:
             return
-        await connection.close(_CLOSE_CODES[code], message)
+        await connection.close(_CLOSE_CODES[code], message[:CLOSE_REASON_MAX])
 
     async def _handshake(self, connection) -> RemotePort | None:
         try:
@@ -80,9 +79,15 @@ class Gateway:
         if not hmac.compare_digest(hello.token.encode(), self.token.encode()):
             await self._fail(connection, "unauthorized", "bad token")
             return None
+        if self.runner.is_reserved(hello.owner):
+            await self._fail(connection, "unauthorized", f"{hello.owner} is a hosted brain")
+            return None
         port = RemotePort(connection, hello.owner, hello.role)
-        await connection.send(encode(self.runner.welcome_for(hello.owner, hello.role)))
-        log.info("%s connected as %s (%s)", hello.owner, hello.role, hello.client or "?")
+        try:
+            await connection.send(encode(self.runner.welcome_for(hello.owner, hello.role)))
+        except ConnectionClosed:
+            return None
+        log.info("%s connected as %s (%r)", hello.owner, hello.role, hello.client)
         return port
 
     async def handle(self, connection) -> None:
@@ -107,10 +112,13 @@ class Gateway:
             port.closing = True
             port.mailbox.close()
             pump.cancel()
+            await port.shutdown()
             log.info("%s disconnected", port.owner)
 
     async def _agent_loop(self, connection, port: RemotePort) -> None:
         async for text in connection:
+            if port.closing:
+                return  # superseded: this connection no longer speaks for its owner
             try:
                 message = decode_client(text)
             except ProtocolError as err:
@@ -119,27 +127,28 @@ class Gateway:
             if message is None:
                 continue
             if message.type == "join":
-                self.runner.attach(port)  # a join after leave re-attaches the same connection
                 self.runner.request_join(port, message.payload.body)
             elif message.type == "action":
-                self.runner.submit_action(port, message.payload.tick, message.payload.action)
+                accepted = self.runner.submit_action(
+                    port, message.payload.tick, message.payload.action
+                )
+                if not accepted and not self.runner.controls_a_fly(port):
+                    port.deliver(error_message("no_fly", "join before acting"))
             elif message.type == "say":
                 self.runner.say(port, message.payload.text)
             elif message.type == "leave":
                 self.runner.detach(port)
             elif message.type == "hello":
-                port.deliver(_soft_error("already_connected", "hello was already sent"))
+                port.deliver(error_message("already_connected", "hello was already sent"))
 
     async def _spectator_loop(self, connection, port: RemotePort) -> None:
         async for text in connection:
+            if port.closing:
+                return
             try:
                 message = decode_client(text)
             except ProtocolError as err:
                 await self._fail(connection, err.code, str(err))
                 return
             if message is not None and message.type != "hello":
-                port.deliver(_soft_error("spectator", f"spectators cannot {message.type}"))
-
-
-def _soft_error(code: str, message: str) -> ErrorMessage:
-    return ErrorMessage(payload=Error(code=code, message=message, fatal=False))
+                port.deliver(error_message("spectator", f"spectators cannot {message.type}"))

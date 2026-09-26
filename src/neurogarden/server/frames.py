@@ -18,6 +18,8 @@ from neurogarden.protocol.messages import (
     ChronicleMessage,
     Died,
     DiedMessage,
+    Error,
+    ErrorMessage,
     Frame,
     FrameMessage,
     Joined,
@@ -116,6 +118,10 @@ def chronicle_message(tick: int, text: str) -> ChronicleMessage:
     return ChronicleMessage(payload=Chronicle(tick=tick, text=text))
 
 
+def error_message(code: str, message: str, fatal: bool = False) -> ErrorMessage:
+    return ErrorMessage(payload=Error(code=code, message=message, fatal=fatal))
+
+
 def frame_message(
     world: World, roster: Roster, events: list[Event], tick: int, says: dict[int, str]
 ) -> FrameMessage:
@@ -125,19 +131,21 @@ def frame_message(
         [int(x), int(y), int(state.resource_kind[y, x]), int(state.resource_amount[y, x])]
         for y, x in zip(ys.tolist(), xs.tolist(), strict=True)
     ]
+    just_died = {event.agent_id for event in events if event.type == "died"}
     agents = []
     for agent_id in sorted(state.agents):
         agent = state.agents[agent_id]
-        if agent_id not in roster.agent_owner:
+        record = roster.record(agent_id)
+        if record is None:
             continue
-        owner = roster.owner_of(agent_id)
-        owner_state = roster.state(owner)
+        if not agent.alive and agent_id not in just_died:
+            continue  # a corpse appears in the frame of the tick it died, then no more
         agents.append(
             AgentView(
                 agent_id=agent_id,
-                owner=owner,
-                lineage=owner_state.lineage if owner_state.agent_id == agent_id else 0,
-                name=owner_state.name if owner_state.agent_id == agent_id else "",
+                owner=record.owner,
+                lineage=record.lineage,
+                name=record.name,
                 x=agent.x,
                 y=agent.y,
                 facing=agent.facing,

@@ -8,10 +8,12 @@ so the two directions form discriminated unions.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+log = logging.getLogger("neurogarden.protocol")
 PROTOCOL_VERSION = 1
 OWNER_PATTERN = r"^[A-Za-z0-9_.-]{1,64}$"
 SAY_MAX = 40
@@ -328,6 +330,7 @@ def _decode(text: str | bytes, adapter: TypeAdapter, known: frozenset[str]):
     if raw.get("v") != PROTOCOL_VERSION:
         raise ProtocolError("unsupported_version", f"protocol version {raw.get('v')!r}")
     if not isinstance(raw["type"], str) or raw["type"] not in known:
+        log.debug("ignoring a message of unknown type %r", raw["type"])
         return None  # unknown types are ignored: the protocol grows by addition
     try:
         return adapter.validate_python(raw)

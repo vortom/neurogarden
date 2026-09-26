@@ -7,6 +7,7 @@ from neurogarden.server.roster import Roster
 
 class FakePort:
     role = "agent"
+    closing = False
 
     def __init__(self, owner):
         self.owner = owner

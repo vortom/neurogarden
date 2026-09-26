@@ -37,7 +37,8 @@ class ServerConfig:
 
 
 def _is_loopback(host: str) -> bool:
-    if host in ("localhost", ""):
+    """'' means every interface for websockets, so it is not loopback — nor is 0.0.0.0 or ::."""
+    if host == "localhost":
         return True
     try:
         return ipaddress.ip_address(host).is_loopback
@@ -105,11 +106,15 @@ class Server:
 
     async def __aexit__(self, *exc) -> None:
         self.stop.set()
-        if self._ticker is not None:
-            await self._ticker
-        if self._ws is not None:
-            self._ws.close(close_connections=True, code=1001, reason="server shutting down")
-            await self._ws.wait_closed()
+        try:
+            if self._ticker is not None:
+                (stopped,) = await asyncio.gather(self._ticker, return_exceptions=True)
+                if isinstance(stopped, BaseException):  # retrieved, so never "never retrieved"
+                    log.error("the world stopped ticking", exc_info=stopped)
+        finally:
+            if self._ws is not None:  # the listener closes even if the ticker died
+                self._ws.close(close_connections=True, code=1001, reason="server shutting down")
+                await self._ws.wait_closed()
 
     @property
     def url(self) -> str:
@@ -119,9 +124,11 @@ class Server:
         await self.stop.wait()
 
 
-async def serve(config: ServerConfig) -> None:
-    """Run until SIGINT/SIGTERM."""
+async def serve(config: ServerConfig, on_ready=None) -> None:
+    """Run until SIGINT/SIGTERM; `on_ready(server)` sees the port the world actually bound."""
     async with Server(config) as server:
+        if on_ready is not None:
+            on_ready(server)
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:

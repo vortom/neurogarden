@@ -8,6 +8,15 @@ from typing import Any
 from .names import fly_name
 
 
+@dataclass(frozen=True)
+class AgentRecord:
+    """Who a fly was: kept after the owner has moved on, so a corpse still has a name."""
+
+    owner: str
+    lineage: int
+    name: str
+
+
 @dataclass
 class OwnerState:
     owner: str
@@ -22,7 +31,7 @@ class OwnerState:
 class Roster:
     def __init__(self) -> None:
         self.owners: dict[str, OwnerState] = {}
-        self.agent_owner: dict[int, str] = {}
+        self.agents: dict[int, AgentRecord] = {}
 
     def state(self, owner: str) -> OwnerState:
         return self.owners.setdefault(owner, OwnerState(owner))
@@ -35,12 +44,17 @@ class Roster:
         return superseded
 
     def detach(self, port) -> None:
+        """Forget the port; an owner with no fly and no lives is forgotten with it."""
         state = self.owners.get(port.owner)
-        if state is not None and state.port is port:
-            state.port = None
+        if state is None or state.port is not port:
+            return
+        state.port = None
+        if state.agent_id is None and state.lineage == 0:
+            del self.owners[port.owner]  # a hello that never hatched leaves nothing behind
 
     def live_agent(self, owner: str) -> int | None:
-        return self.state(owner).agent_id
+        state = self.owners.get(owner)
+        return None if state is None else state.agent_id
 
     def born(self, owner: str, agent_id: int) -> tuple[int, str]:
         """Record a new fly; returns (lineage, name)."""
@@ -48,26 +62,38 @@ class Roster:
         state.lineage += 1
         state.agent_id = agent_id
         state.name = fly_name(owner, state.lineage)
-        self.agent_owner[agent_id] = owner
+        self.agents[agent_id] = AgentRecord(owner, state.lineage, state.name)
         return state.lineage, state.name
 
     def died(self, agent_id: int, lifespan: int) -> OwnerState:
-        state = self.state(self.agent_owner[agent_id])
+        state = self.state(self.agents[agent_id].owner)
         state.agent_id = None
         state.lifespans.append(lifespan)
         state.best_lifespan = max(state.best_lifespan, lifespan)
         return state
 
+    def record(self, agent_id: int) -> AgentRecord | None:
+        return self.agents.get(agent_id)
+
+    def knows(self, agent_id: int) -> bool:
+        """False for a fly the runner never hatched — a world may arrive with agents in it."""
+        return agent_id in self.agents
+
     def owner_of(self, agent_id: int) -> str:
-        return self.agent_owner[agent_id]
+        return self.agents[agent_id].owner
 
     def port_for(self, agent_id: int) -> Any:
-        state = self.owners.get(self.agent_owner.get(agent_id, ""))
-        return None if state is None else state.port
+        """The port steering this fly; a corpse has none, even if its owner flies again."""
+        record = self.agents.get(agent_id)
+        state = self.owners.get(record.owner) if record is not None else None
+        if state is None or state.agent_id != agent_id:
+            return None
+        return state.port
 
     def connected(self, agent_id: int) -> bool:
         return self.port_for(agent_id) is not None
 
     def scores(self) -> list[OwnerState]:
-        """Owners ordered for a leaderboard: best lifespan first, then name."""
-        return sorted(self.owners.values(), key=lambda s: (-s.best_lifespan, s.owner))
+        """Owners who have hatched at least one fly: best lifespan first, then name."""
+        lived = [state for state in self.owners.values() if state.lineage > 0]
+        return sorted(lived, key=lambda s: (-s.best_lifespan, s.owner))

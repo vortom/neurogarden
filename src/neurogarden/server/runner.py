@@ -16,10 +16,12 @@ from neurogarden.protocol.catalog import build_catalog
 
 from . import frames
 from .chronicle import Chronicler, Subject
+from .ports import LocalPort
 from .roster import Roster
 
 log = logging.getLogger("neurogarden.server")
 RECENT_CHRONICLE = 30
+SAY_TTL = 150  # ticks a speech bubble stays over a fly
 
 
 class WorldRunner:
@@ -42,7 +44,7 @@ class WorldRunner:
         self.catalog = build_catalog()
         self.roster = Roster()
         self.spectators: list = []
-        self.spawn_log: list[tuple[int, int, str, int]] = []  # (tick, agent_id, owner, lineage)
+        self.spawn_log: list[tuple[int, int, str, int, str]] = []  # tick, agent, owner, life, body
         self.action_log: list[dict[int, int]] = []  # actions applied per tick, idle included
         self.chronicle: deque[tuple[int, str]] = deque(maxlen=RECENT_CHRONICLE)
         self._chronicler = Chronicler(world.config, world.state.width, world.state.height)
@@ -51,7 +53,7 @@ class WorldRunner:
         self._last_sent: dict[int, int] = {}
         self.missed: dict[int, int] = {}
         self._trackers: dict[int, StatsTracker] = {}
-        self._says: dict[int, str] = {}
+        self._says: dict[int, tuple[int, str]] = {}  # agent_id -> (tick said, text)
         self._next_tick_at: float | None = None
 
     # --- what clients ask --------------------------------------------------------------
@@ -61,8 +63,15 @@ class WorldRunner:
             owner, role, self.world, self.map_name, self.tps, self.catalog, self.motd
         )
 
+    def is_reserved(self, owner: str) -> bool:
+        """True for an owner flown by a hosted brain: no remote connection may take it over."""
+        state = self.roster.owners.get(owner)
+        return state is not None and isinstance(state.port, LocalPort)
+
     def attach(self, port) -> None:
         """Bind an agent port to its owner; a previous connection of the owner is superseded."""
+        if port.closing:
+            return
         superseded = self.roster.attach(port)
         if superseded is not None:
             superseded.close(4004, "superseded by a newer connection")
@@ -76,25 +85,37 @@ class WorldRunner:
         was_attached = self.roster.port_for(agent_id) is port if agent_id is not None else False
         self.roster.detach(port)
         if was_attached:
+            self._pending.pop(agent_id, None)  # no stale action replayed on reconnect
+            self._last_sent.pop(agent_id, None)  # and no missed charged for the silence
             self._note(self._chronicler.away(self.world.tick, self._subject(agent_id)))
 
     def request_join(self, port, body: str = "fly") -> None:
+        """Queue a join for the next tick; one queued join per port, the newest wins."""
+        self._queued_joins = [entry for entry in self._queued_joins if entry[0] is not port]
         self._queued_joins.append((port, body))
+
+    def controls_a_fly(self, port) -> bool:
+        agent_id = self.roster.live_agent(port.owner)
+        return agent_id is not None and self.roster.port_for(agent_id) is port
 
     def submit_action(self, port, tick: int, action: int) -> bool:
         """Accept the action for `tick` if this port controls a live fly and the tick is current."""
-        agent_id = self.roster.live_agent(port.owner)
-        if agent_id is None or self.roster.port_for(agent_id) is not port:
+        if not self.controls_a_fly(port):
             return False
+        agent_id = self.roster.live_agent(port.owner)
         if self._last_sent.get(agent_id) != tick:
             return False
         self._pending[agent_id] = (tick, action)
         return True
 
     def say(self, port, text: str) -> None:
+        if not self.controls_a_fly(port):
+            return
         agent_id = self.roster.live_agent(port.owner)
-        if agent_id is not None and self.roster.port_for(agent_id) is port:
-            self._says[agent_id] = text
+        if text:
+            self._says[agent_id] = (self.world.tick, text)
+        else:
+            self._says.pop(agent_id, None)  # an empty say clears the bubble at once
 
     def add_spectator(self, port) -> None:
         self.spectators.append(port)
@@ -125,10 +146,11 @@ class WorldRunner:
                 body = BodyState.from_observation(result.observations[agent_id])
                 tracker.update(result.events, body)
 
-        subjects = {agent_id: self._subject(agent_id) for agent_id in result.observations}
+        ours = [agent_id for agent_id in result.observations if self.roster.knows(agent_id)]
+        subjects = {agent_id: self._subject(agent_id) for agent_id in ours}
         died = {e.agent_id: e for e in result.events if e.type == "died"}
         deadline = self.deadline_ms()
-        for agent_id in result.observations:
+        for agent_id in ours:
             port = self.roster.port_for(agent_id)
             if port is None:
                 if agent_id in died:
@@ -144,31 +166,39 @@ class WorldRunner:
                 self._last_sent[agent_id] = tick  # before delivery: a local brain answers at once
                 port.deliver(message)
 
+        says = self._bubbles(self.world.tick)
         if self.spectators:
-            frame = frames.frame_message(self.world, self.roster, result.events, tick, self._says)
+            frame = frames.frame_message(self.world, self.roster, result.events, tick, says)
             for spectator in self.spectators:
                 spectator.deliver(frame)
         for text in self._chronicler.lines(tick, result.events, subjects):
             self._note(text, tick)
-        log.debug(
-            "tick %d: %d living, %d watching", tick, len(result.observations), len(self.spectators)
-        )
+        log.debug("tick %d: %d living, %d watching", tick, len(ours), len(self.spectators))
 
     def _apply_joins(self, tick: int) -> None:
         queued, self._queued_joins = self._queued_joins, []
         for port, body in queued:
+            if port.closing:
+                continue  # the connection went away before the tick
             state = self.roster.state(port.owner)
             if state.port is not port:
-                continue  # superseded or gone before the tick
+                if state.port is not None:
+                    continue  # a superseded connection cannot take the fly back
+                self.attach(port)  # a join after leave or a disconnect re-attaches this one
             if state.agent_id is not None:
                 port.deliver(
                     frames.joined_message(state.agent_id, state.lineage, state.name, tick, True)
                 )
                 continue
-            agent_id = self.world.spawn(body)
+            try:
+                agent_id = self.world.spawn(body)
+            except ValueError as err:  # the map is full: the world lives on without this fly
+                log.warning("%s could not hatch: %s", port.owner, err)
+                port.deliver(frames.error_message("world_full", str(err), fatal=False))
+                continue
             lineage, name = self.roster.born(port.owner, agent_id)
             agent = self.world.state.agents[agent_id]
-            self.spawn_log.append((tick, agent_id, port.owner, lineage))
+            self.spawn_log.append((tick, agent_id, port.owner, lineage, body))
             self._trackers[agent_id] = StatsTracker(
                 agent_id, (agent.x, agent.y), self.world.config.day_length
             )
@@ -193,23 +223,31 @@ class WorldRunner:
                 self.missed[agent.id] = self.missed.get(agent.id, 0) + 1
         return actions
 
+    def _bubbles(self, tick: int) -> dict[int, str]:
+        """The speech bubbles still worth drawing; old ones fade away."""
+        self._says = {
+            agent_id: said for agent_id, said in self._says.items() if tick - said[0] < SAY_TTL
+        }
+        return {agent_id: text for agent_id, (_, text) in self._says.items()}
+
     def _bury(self, agent_id: int, tick: int, causes: list[str], port) -> None:
         stats = self._trackers.pop(agent_id).stats
-        owner_state = self.roster.state(self.roster.owner_of(agent_id))
-        lineage, name = owner_state.lineage, owner_state.name
+        record = self.roster.record(agent_id)
         self.roster.died(agent_id, stats.lifespan)
         for table in (self._pending, self._last_sent, self.missed, self._says):
             table.pop(agent_id, None)
         if port is not None:
-            port.deliver(frames.died_message(agent_id, lineage, name, tick, causes, stats))
-        log.info("%s's %s died at tick %d: %s", owner_state.owner, name, tick, ", ".join(causes))
+            port.deliver(
+                frames.died_message(agent_id, record.lineage, record.name, tick, causes, stats)
+            )
+        log.info("%s's %s died at tick %d: %s", record.owner, record.name, tick, ", ".join(causes))
 
     def _subject(self, agent_id: int) -> Subject:
         agent = self.world.state.agents[agent_id]
-        owner = self.roster.owner_of(agent_id)
-        state = self.roster.state(owner)
-        name = state.name if state.agent_id == agent_id else f"fly {agent_id}"
-        return Subject(owner, name, agent.x, agent.y)
+        record = self.roster.record(agent_id)
+        if record is None:
+            return Subject("", f"fly {agent_id}", agent.x, agent.y)
+        return Subject(record.owner, record.name, agent.x, agent.y)
 
     def _note(self, text: str, tick: int | None = None) -> None:
         tick = self.world.tick if tick is None else tick
@@ -232,6 +270,10 @@ class WorldRunner:
                     break
                 except TimeoutError:
                     pass
-            self.tick()
-            now = self.clock()
-            self._next_tick_at = max(self._next_tick_at + period, now)
+            self._next_tick_at = max(self._next_tick_at + period, self.clock())
+            try:
+                self.tick()  # rebased first, so deadline_ms() inside the tick is the time left
+            except Exception:  # a broken tick stops the world instead of freezing it
+                log.exception("tick %d failed; stopping the world", self.world.tick)
+                stop.set()
+                return

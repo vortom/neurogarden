@@ -1,7 +1,10 @@
 """Integration: a real server on an ephemeral port, real SDK clients, real sockets."""
 
 import asyncio
+import contextlib
+import gc
 import json
+import logging
 import urllib.request
 
 import pytest
@@ -13,10 +16,16 @@ from neurogarden.sdk import AsyncClient, ConnectionLost, ServerError, Session, r
 from neurogarden.server import Server, ServerConfig
 
 FAST = dict(port=0, tps=50.0, npcs=[], hello_timeout=0.5)
+JOIN_FRAME = '{"v": 1, "type": "join", "payload": {}}'
 
 
 def run(coro):
     return asyncio.run(coro)
+
+
+def hello_frame(owner, role="agent", token="dev"):
+    payload = {"protocol": 1, "token": token, "owner": owner, "role": role}
+    return json.dumps({"v": 1, "type": "hello", "payload": payload})
 
 
 def test_two_brains_and_an_npc_share_the_world_and_the_spectator_sees_them_all():
@@ -94,6 +103,121 @@ def test_a_newer_connection_supersedes_the_older_one():
             await old.close()
 
     run(scenario())
+
+
+def test_a_superseded_connection_cannot_take_the_fly_back_by_joining():
+    async def scenario():
+        async with Server(ServerConfig(**FAST)) as server:
+            async with connect(server.url) as stale:
+                await stale.send(hello_frame("alice"))
+                await stale.recv()  # welcome
+                await stale.send(JOIN_FRAME)
+                async with AsyncClient(server.url, owner="alice") as fresh:
+                    joined = await fresh.join()
+                    for _ in range(10):  # the stale connection keeps asking for the fly
+                        with contextlib.suppress(Exception):
+                            await stale.send(JOIN_FRAME)
+                        await asyncio.sleep(0.005)
+                    seen = [await fresh.next_observation() for _ in range(5)]
+                    assert all(observation is not None for observation in seen)
+                    assert server.runner.roster.live_agent("alice") == joined.agent_id
+
+    run(scenario())
+
+
+def test_a_hosted_npc_owner_cannot_be_taken_over_by_a_remote_client():
+    async def scenario():
+        async with Server(ServerConfig(**{**FAST, "npcs": [("scripted", 1)]})) as server:
+            with pytest.raises(ServerError) as err:
+                async with AsyncClient(server.url, owner="npc-scripted-1"):
+                    pass
+            assert err.value.code == "unauthorized"
+            async with AsyncClient(server.url, owner="w", role="spectator") as watcher:
+                frame = await watcher.next_frame()
+                npc = next(a for a in frame.agents if a.owner == "npc-scripted-1")
+                assert npc.connected  # the hosted brain still has its fly
+
+    run(scenario())
+
+
+def test_an_action_before_joining_answers_no_fly_without_closing():
+    async def scenario():
+        async with Server(ServerConfig(**FAST)) as server:
+            async with connect(server.url) as ws:
+                await ws.send(hello_frame("alice"))
+                await ws.recv()  # welcome
+                await ws.send('{"v": 1, "type": "action", "payload": {"tick": 0, "action": 1}}')
+                return json.loads(await ws.recv())
+
+    message = run(scenario())
+    assert message["type"] == "error"
+    assert (message["payload"]["code"], message["payload"]["fatal"]) == ("no_fly", False)
+
+
+def test_a_close_reason_too_long_for_a_frame_is_truncated():
+    async def scenario():
+        async with Server(ServerConfig(**FAST)) as server:
+            async with connect(server.url) as ws:
+                await ws.send(json.dumps({"v": "x" * 300, "type": "hello", "payload": {}}))
+                error = json.loads(await ws.recv())
+                try:
+                    await ws.recv()
+                except Exception as closed:  # noqa: BLE001 - the close is what we test
+                    return error, closed.rcvd.code, closed.rcvd.reason
+
+    error, code, reason = run(scenario())
+    assert code == 4001 and len(reason.encode()) <= 123
+    assert len(error["payload"]["message"]) > 123  # the whole story stays in the payload
+
+
+def test_an_abrupt_disconnect_leaves_no_task_exception_behind(caplog):
+    caplog.set_level(logging.ERROR, logger="asyncio")
+
+    async def scenario():
+        async with Server(ServerConfig(**FAST)) as server:
+            client = await AsyncClient(server.url, owner="alice").__aenter__()
+            await client.join()
+            await client.next_observation()
+            client._connection.transport.abort()  # yanked cable, no close handshake
+            await asyncio.sleep(0.2)
+
+    run(scenario())
+    gc.collect()
+    assert not [r for r in caplog.records if "never retrieved" in r.getMessage()]
+
+
+def test_a_failing_tick_stops_the_world_and_still_closes_the_listener(caplog):
+    async def scenario():
+        async with Server(ServerConfig(**FAST)) as server:
+            real_tick, ticks = server.runner.tick, []
+
+            def exploding_tick():
+                ticks.append(1)
+                if len(ticks) == 3:
+                    raise RuntimeError("the sky fell")
+                real_tick()
+
+            server.runner.tick = exploding_tick
+            await asyncio.wait_for(server.stop.wait(), timeout=2)
+            url = server.url
+        with pytest.raises(ConnectionLost):  # the listener went down with the world
+            await AsyncClient(url, owner="late").__aenter__()
+
+    run(scenario())
+    assert "the sky fell" in caplog.text
+
+
+def test_a_slow_spectator_gets_the_latest_frame_not_a_backlog():
+    async def scenario():
+        async with Server(ServerConfig(**FAST)) as server:
+            async with AsyncClient(server.url, owner="w", role="spectator") as watcher:
+                await watcher.next_frame()
+                await asyncio.sleep(0.2)  # ~10 frames pile up at 50 tps
+                frame = await watcher.next_frame()
+                return frame.tick, server.runner.world.tick
+
+    shown, now = run(scenario())
+    assert now - shown <= 2  # latest-wins over the wire, not a queue of stale frames
 
 
 def test_death_then_rejoin_gives_the_next_lineage_and_the_stats():
@@ -217,9 +341,10 @@ def test_health_endpoint_answers_plain_http():
     assert run(scenario()) == b"OK\n"
 
 
-def test_non_loopback_bind_with_the_default_token_is_refused():
+@pytest.mark.parametrize("host", ["0.0.0.0", "", "::", "192.168.1.10"])
+def test_a_bind_beyond_loopback_with_the_default_token_is_refused(host):
     with pytest.raises(ValueError):
-        Server(ServerConfig(host="0.0.0.0"))
+        Server(ServerConfig(host=host))
 
 
 def test_server_actions_replay_through_the_engine_alone():
@@ -243,7 +368,7 @@ def test_server_actions_replay_through_the_engine_alone():
     spawn_log, action_log, expected = run(scenario())
     replay = World.from_map(maps.load("drosoville"), Config(), seed=11)
     for tick, actions in enumerate(action_log):
-        for spawn_tick, agent_id, _, _ in spawn_log:  # spawns of this tick, in join order
+        for spawn_tick, agent_id, *_ in spawn_log:  # spawns of this tick, in join order
             if spawn_tick == tick:
                 assert replay.spawn() == agent_id
         replay.step(actions)

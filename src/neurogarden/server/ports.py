@@ -7,8 +7,11 @@ Hosted "NPC" brains are ordinary clients that happen to run in-process (architec
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any, Protocol
+
+from websockets.exceptions import ConnectionClosed
 
 from neurogarden.brains.base import Brain, brain_seed
 from neurogarden.protocol.codec import decode_channels
@@ -16,11 +19,13 @@ from neurogarden.protocol.mailbox import Mailbox
 from neurogarden.protocol.messages import BodyInfo, encode
 
 log = logging.getLogger("neurogarden.server")
+CLOSE_REASON_MAX = 100  # a WebSocket close reason must fit in 123 bytes
 
 
 class Port(Protocol):
     owner: str
     role: str
+    closing: bool
 
     def deliver(self, message: Any) -> None: ...  # never blocks
 
@@ -47,18 +52,31 @@ class RemotePort:
             return
         self.closing = True
         self.mailbox.close()
-        self._closer = asyncio.get_running_loop().create_task(self.connection.close(code, reason))
+        self._closer = asyncio.get_running_loop().create_task(
+            self.connection.close(code, reason[:CLOSE_REASON_MAX])
+        )
+
+    async def shutdown(self) -> None:
+        """Let a close started by `close()` finish, so no task is left pending."""
+        if self._closer is not None:
+            closer, self._closer = self._closer, None
+            with contextlib.suppress(ConnectionClosed):
+                await closer
 
     async def pump(self) -> None:
         """Send queued messages until the mailbox closes or the socket goes away."""
-        while (message := await self.mailbox.get()) is not None:
-            await self.connection.send(encode(message))
+        try:
+            while (message := await self.mailbox.get()) is not None:
+                await self.connection.send(encode(message))
+        except ConnectionClosed:
+            return  # the reader notices too; nothing to report from here
 
 
 class LocalPort:
     """A brain in the server process. Acts the moment an observation is delivered."""
 
     role = "agent"
+    closing = False
 
     def __init__(
         self, brain: Brain, owner: str, runner, body: BodyInfo, rejoin: bool = True
@@ -76,7 +94,12 @@ class LocalPort:
             self.brain.reset(brain_seed(message.payload.lineage))
         elif message.type == "observation":
             channels = decode_channels(message.payload.channels, self.body)
-            self.runner.submit_action(self, message.payload.tick, int(self.brain.act(channels)))
+            try:
+                action = int(self.brain.act(channels))
+            except Exception:  # a broken hosted brain idles; the world keeps turning
+                log.exception("hosted brain of %s failed to act; idling this tick", self.owner)
+                return
+            self.runner.submit_action(self, message.payload.tick, action)
         elif message.type == "died" and self.rejoin:
             self.runner.request_join(self)
 
