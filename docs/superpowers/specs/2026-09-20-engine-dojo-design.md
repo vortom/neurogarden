@@ -66,11 +66,15 @@ reading the bundled map via `importlib.resources`.
 
 ```python
 world = World.from_map(map_text, config=Config(), seed=0)  # or World.restore(snapshot)
-fly = world.spawn(body="fly")                # -> agent id
-obs = world.observe(fly)                     # observation without advancing time
-result = world.step({fly: Action.MOVE_N})    # exactly one tick -> StepResult
-result.observations[fly]; result.events; result.agent_events[fly]
-world.snapshot(); world.state_hash(); world.tick
+fly = world.spawn(body="fly")  # -> agent id
+obs = world.observe(fly)  # observation without advancing time
+result = world.step({fly: Action.MOVE_N})  # exactly one tick -> StepResult
+result.observations[fly]
+result.events
+result.agent_events[fly]
+world.snapshot()
+world.state_hash()
+world.tick
 ```
 
 ## 3. World model
@@ -300,6 +304,7 @@ function may see). This keeps the agent stream free of world state.
 
 ```python
 import gymnasium, neurogarden.dojo  # import registers the env
+
 env = gymnasium.make("NeuroGarden/Drosoville-v0", reward="wellbeing", max_steps=6000)
 obs, info = env.reset(seed=1)
 obs, reward, terminated, truncated, info = env.step(action)
