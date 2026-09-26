@@ -13,9 +13,10 @@ from websockets.asyncio.server import serve as websockets_serve
 from neurogarden.brains import BRAINS
 from neurogarden.engine import Config, World, maps
 
-from .gateway import Gateway, health_check
+from .gateway import Gateway
 from .ports import LocalPort
 from .runner import WorldRunner
+from .static_files import make_process_request
 
 log = logging.getLogger("neurogarden.server")
 DEFAULT_TOKEN = "dev"
@@ -32,6 +33,7 @@ class ServerConfig:
     token: str = DEFAULT_TOKEN
     npcs: list[tuple[str, int]] = field(default_factory=lambda: [("scripted", 1)])
     hello_timeout: float = 5.0
+    web: bool = True  # serve the built browser client on plain HTTP GETs
     motd: str = DEFAULT_MOTD
     config: Config | None = None
 
@@ -90,7 +92,7 @@ class Server:
             self.gateway.handle,
             self.config.host,
             self.config.port,
-            process_request=health_check,
+            process_request=make_process_request(self.config.web),
         )
         self.port = self._ws.sockets[0].getsockname()[1]
         self._ticker = asyncio.get_running_loop().create_task(self.runner.run(self.stop))

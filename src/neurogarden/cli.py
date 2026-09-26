@@ -50,6 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="hosted brains kept alive in the world (default scripted:1; 'none' for none)",
     )
     serve_cmd.add_argument("--hello-timeout", type=float, default=5.0)
+    serve_cmd.add_argument("--no-web", action="store_true", help="do not serve the browser page")
 
     join_cmd = commands.add_parser("join", help="connect a brain to a live world")
     join_cmd.add_argument("--brain", choices=sorted(BRAINS), default="scripted")
@@ -75,6 +76,8 @@ def banner(server) -> None:
     print(f"NeuroGarden — {server.config.map} (seed {server.config.seed}) on {url}")
     print(f"join:  neurogarden join --owner you --brain scripted --url {url}")
     print(f"watch: neurogarden watch --url {url}")
+    if server.config.web:
+        print(f"play:  open http://{server.config.host}:{server.port}/ in a browser")
 
 
 def cmd_serve(args) -> int:
@@ -89,6 +92,7 @@ def cmd_serve(args) -> int:
             token=args.token,
             npcs=[npc for npc in npcs if npc[0] != "none"],
             hello_timeout=args.hello_timeout,
+            web=not args.no_web,
         )
         asyncio.run(serve(config, on_ready=banner))
     except ValueError as err:
