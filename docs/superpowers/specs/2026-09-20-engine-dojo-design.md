@@ -223,8 +223,7 @@ All tunables live in one frozen `Config` dataclass, validated on construction
 
 `energy_move_night` applies when `is_night`: moving in the dark costs double,
 which gives every brain (not only vision users) a reason to rest at night.
-Values are starting points; implementation tunes them until the balance guard
-passes and records the final values here.
+Balance guard result (sub-project 1): the defaults above passed unchanged — over seeds 0–19 with `max_steps=6000` the `ScriptedBrain` median lifespan is 6000 ticks and the `RandomBrain` median is 899.
 
 ## 4. Senses
 
