@@ -45,6 +45,14 @@ obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
 - **Deterministic**: same seed and same actions give the same world, tick for
   tick. A replay is a seed plus a list of actions.
 
+## Notes
+
+- `RULES_VERSION` and `tests/make_golden.py`: any change to state evolution
+  or observations must bump `RULES_VERSION` and regenerate the golden replay
+  with `uv run python tests/make_golden.py`.
+- Pass `--ascii` to `neurogarden.dojo.watch` on terminals where the emoji
+  tiles misalign.
+
 ## Development
 
 ```bash

@@ -1,7 +1,7 @@
 # Sub-project 1 — Engine + Dojo
 
 Date: 2026-09-20
-Status: design approved in brainstorm; awaiting written-spec review.
+Status: approved; implemented on branch feat/engine-dojo (2026-09-26).
 Parent: `2026-09-20-neurogarden-architecture-design.md` (decisions there are binding).
 
 ## 1. Goal
@@ -139,6 +139,7 @@ water pull in different directions; every walkable tile reachable from the nest.
 
 Per agent, all integers: `id` (from 1), `body` (body config name), `x`, `y`,
 `facing`, `satiety`, `hydration`, `energy`, `health`, `age`, `alive`, `bumped`.
+`alive` and `bumped` are booleans (hashed as 0/1, serialised as JSON booleans).
 
 Needs (`satiety`, `hydration`, `energy`) and `health` live in `[0, 1000]`.
 **Health is a consequence, not a need:** needs → health → death.
@@ -268,6 +269,9 @@ coordinates — for spectators, storage and stats) and `agent_events[agent_id]`
 (that agent's own events with coordinates stripped — what a brain or a reward
 function may see). This keeps the agent stream free of world state.
 
+Events carry the tick in which they happened (`t`); `StepResult.tick` and the
+observations describe the world after the step (`t + 1`).
+
 ## 6. Determinism
 
 - **PRNG:** SplitMix64, implemented in `rng.py`, state = one `u64`
@@ -284,7 +288,8 @@ function may see). This keeps the agent stream free of world state.
 - **Snapshot:** `World.snapshot()` returns a JSON-serialisable dict:
   `rules_version`, config, `tick`, `rng_state`, size, the five layer arrays
   (base64 of little-endian C-order bytes), agents, `next_agent_id`.
-  `World.restore(snapshot)` reproduces the world exactly.
+  `rng_state` is serialised as a decimal string (a u64 exceeds JavaScript
+  number precision). `World.restore(snapshot)` reproduces the world exactly.
 - **State hash:** `World.state_hash()` = SHA-256 over, in order:
   `u32 rules_version`, `u64 tick`, `u64 rng_state`, `u16 W`, `u16 H`, the layer
   arrays `terrain, resource_kind, resource_amount, resource_age, occupant`
@@ -386,7 +391,7 @@ deliver in sub-project 2.
   that many ticks before following the scent again.
 
 `python -m neurogarden.dojo.watch --brain {random,scripted} --seed N --tps 10
---max-steps 12000 [--ascii]`: redraws the frame in place; emoji tiles (🪰 🍎 🌳 🏠 💧 🪨) with an
+--max-steps 12000 [--ascii]`: redraws the frame in place; emoji tiles (🪰 🍎 🌳 🏠 🟦 🪨) with an
 ASCII fallback; HUD with day, tick, ☀️/🌙 and need bars.
 
 ## 9. Testing (test-first)
@@ -411,7 +416,9 @@ ASCII fallback; HUD with day, tick, ☀️/🌙 and need bars.
   `truncated` semantics; reward functions on hand-built bodies.
 - **Balance guard:** over 20 seeds with `max_steps=6000`, `ScriptedBrain`
   median lifespan ≥ 3600 ticks and ≥ 3× the `RandomBrain` median. Catches a
-  world that is trivially survivable or impossible.
+  world that is impossible for a sensible brain and a random brain that does
+  too well against it; it does not bound the scripted brain's lifespan from
+  above.
 - **Benchmark (reported, not asserted):** single-agent steps per second;
   design target ≥ 2,000.
 
@@ -422,3 +429,13 @@ agent id, or bad spawn tile; invalid action ids never raise (they become `idle`
 with an event) because action input is untrusted once a network sits in front
 of the engine. `World.restore` rejects snapshots whose `rules_version` differs
 from the running engine.
+
+## 11. Known gaps (for later sub-projects)
+
+- Replays as defined here spawn all agents at tick 0; the persistent action
+  log of sub-project 4 must tick-stamp spawns and despawns.
+- Dead agents stay in `state.agents` (and in snapshots/hashes) — sub-project 4
+  should add a logged `World.despawn(id)` input rather than an automatic rule.
+- Bodies are data for description, not dispatch: `senses.observe` and
+  `actions.apply_action` ignore `agent.body`, so the `egocentric` preset means
+  frame dispatch in those two functions.
