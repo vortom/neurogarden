@@ -367,7 +367,8 @@ accumulate in the engine state until sub-project 4 adds `despawn`.
 
 ## 11. What the implementation added (and where it deviates)
 
-Additions, all additive to the protocol above:
+Additions, all additive to the protocol above (a client written to sections 3–6
+still works):
 
 - **Fly names.** Every life gets a deterministic two-word name from
   `(owner, lineage)` — `joined.name`, `died.name`, `frame.agents[].name`.
@@ -387,6 +388,29 @@ Additions, all additive to the protocol above:
 - **`neurogarden watch --follow OWNER`** highlights one owner's fly.
 - **`neurogarden serve` defaults to `--npc scripted:1`** (a resident fly), so
   a fresh server is never an empty garden; `--npc none` for silence.
+- **Catalog `events`.** `welcome.catalog.events` maps every event type the
+  engine can emit to the data keys it carries, so a remote brain can read an
+  event stream without the engine package (event `data` is still free-form
+  JSON in the schema; the table is what says what to expect).
+- **The catalog grows by addition.** Server → client payloads ignore unknown
+  fields, client → server payloads forbid them: a newer server may add a field
+  without breaking a deployed SDK, and the server still never guesses what a
+  client meant.
+
+Corrections to sections 3–6, made while reviewing the implementation:
+
+- `frame.resources` is a list of `{x, y, kind, amount}` objects, not of bare
+  `[x, y, kind, amount]` quadruples (§3.4).
+- `spawn_log` entries are `(tick, agent_id, owner, lineage, body)` — the body
+  is part of what sub-project 4 must persist to replay a world (§4.2).
+- A dead fly appears in the frame of the tick it died and never again; its
+  `name` and `lineage` are those of the fly, not of its owner's current life.
+- `say` bubbles expire after 150 ticks, and an empty `say` clears one at once.
+- Hosted (NPC) owner names are reserved: a remote `hello` for one is refused
+  with `unauthorized` and close 4002.
+- `run_brain(url, brain, *, owner, token, lives=None, on_life=None)` replaces
+  the designed `rejoin=`/`max_lives=`: `lives` counts the lives to fly (None
+  for forever) and `on_life(fly)` reports each finished life.
 
 Deviations from sections 2–6:
 
@@ -398,6 +422,6 @@ Deviations from sections 2–6:
 - The engine changed after all: the nest-adjacent spawn rule
   (`RULES_VERSION` 2), because three NPC flies hatching in the map's corner
   looked wrong on the first live run.
-- The implementation was written and tested as a whole (261 tests) and
-  committed in five reviewable steps rather than transcribed from a
-  code-carrying plan.
+- The implementation was written and tested as a whole and committed in seven
+  reviewable steps rather than transcribed from a code-carrying plan; the last
+  two apply what two reviews of the first five found.

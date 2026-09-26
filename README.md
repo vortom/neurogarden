@@ -56,7 +56,9 @@ with Session("ws://127.0.0.1:8765", owner="alice") as session:
 
 Other languages: `neurogarden schema` prints the protocol's JSON Schema
 (`protocol/v1/neurogarden.schema.json`); `welcome` carries a catalog that says
-what every number in an observation means.
+what every number in an observation means and what every event carries. The
+protocol grows by addition: a client ignores fields it does not know, so a
+newer server never breaks an older brain.
 
 ## Quick start: the dojo
 
