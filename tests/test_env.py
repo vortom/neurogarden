@@ -5,11 +5,17 @@ from gymnasium.utils.env_checker import check_env
 
 import neurogarden.dojo as dojo
 from neurogarden.dojo import NeuroGardenEnv, TinyObservation
-from neurogarden.engine import Action, Config, World, maps
+from neurogarden.engine import Action, Config, MapError, World, maps
 
 TINY = """
 #####
 #.N~#
+#####
+"""
+
+CORRIDOR = """
+#####
+#N..#
 #####
 """
 
@@ -74,6 +80,39 @@ def test_death_terminates_and_time_limit_truncates():
     short.reset(seed=0)
     flags = [short.step(Action.IDLE)[2:4] for _ in range(3)]
     assert flags == [(False, False), (False, False), (False, True)]
+
+
+def test_truncation_freezes_the_episode_like_death_does():
+    env = NeuroGardenEnv(map=TINY, max_steps=2)
+    env.reset(seed=0)
+    env.step(Action.IDLE)
+    env.step(Action.IDLE)
+    assert env.world.tick == 2
+    for _ in range(2):  # further calls are a frozen no-op: same flags, the world never advances
+        observation, reward, terminated, truncated, _ = env.step(Action.IDLE)
+        assert (terminated, truncated) == (False, True)
+        assert reward == 0.0
+        assert env.world.tick == 2
+
+
+def test_step_passes_the_action_through_engine_coercion_unchanged():
+    for action in (True, 3.0, "abc"):  # neither a bool, nor a float, nor a string is an action id
+        env = NeuroGardenEnv(map=CORRIDOR)
+        env.reset(seed=0)
+        _, _, terminated, truncated, info = env.step(action)
+        assert not terminated and not truncated
+        assert [e.type for e in info["events"]] == ["invalid_action"]
+
+    env = NeuroGardenEnv(map=CORRIDOR)
+    env.reset(seed=0)
+    _, _, _, _, info = env.step(np.int64(2))  # MOVE_E: numpy ints still move the fly
+    assert [e.type for e in info["events"]] == ["moved"]
+
+
+def test_map_argument_loads_bundled_names_or_parses_raw_text():
+    NeuroGardenEnv(map=".N.")  # a single-row map text, not a bundled name
+    with pytest.raises(MapError):
+        NeuroGardenEnv(map="atlantis")
 
 
 def test_reward_is_pluggable_and_events_carry_no_coordinates():

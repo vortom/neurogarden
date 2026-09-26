@@ -12,6 +12,7 @@ from neurogarden.engine import maps
 from neurogarden.engine.body import action_names, observation_spec
 from neurogarden.engine.clock import day_number
 from neurogarden.engine.config import Config
+from neurogarden.engine.tiles import parse_map
 from neurogarden.engine.world import World
 
 from .render_ansi import render
@@ -36,7 +37,7 @@ class NeuroGardenEnv(gymnasium.Env):
             raise ValueError(f"unsupported render_mode {render_mode!r}")
         if max_steps <= 0:
             raise ValueError("max_steps must be positive")
-        self._map_text = map if "\n" in map else maps.load(map)
+        self._map_text = maps.load(map) if map in maps.available() else parse_map(map).text
         self.config = config or Config()
         self._reward = resolve(reward)
         self.max_steps = max_steps
@@ -57,6 +58,8 @@ class NeuroGardenEnv(gymnasium.Env):
         self._fly = 0
         self._steps = 0
         self._done = True
+        self._terminated = False
+        self._truncated = False
         self._observation: dict[str, np.ndarray] = {}
         self._prev_body: BodyState | None = None
         self._tracker: StatsTracker | None = None
@@ -75,6 +78,8 @@ class NeuroGardenEnv(gymnasium.Env):
         self._tracker = StatsTracker(self._fly, (agent.x, agent.y), self.config.day_length)
         self._steps = 0
         self._done = False
+        self._terminated = False
+        self._truncated = False
         self._observation = self.world.observe(self._fly)
         self._prev_body = BodyState.from_observation(self._observation)
         return self._observation, self._info([])
@@ -82,9 +87,9 @@ class NeuroGardenEnv(gymnasium.Env):
     def step(self, action):
         if self.world is None:
             raise RuntimeError("call reset() before step()")
-        if self._done:  # stepping a finished episode changes nothing
-            return self._observation, 0.0, True, False, self._info([])
-        result = self.world.step({self._fly: int(action)})
+        if self._done:  # episode already ended: frozen no-op, the world does not advance
+            return self._observation, 0.0, self._terminated, self._truncated, self._info([])
+        result = self.world.step({self._fly: action})
         self._observation = result.observations[self._fly]
         body = BodyState.from_observation(self._observation)
         died = not self.world.state.agents[self._fly].alive
@@ -93,8 +98,10 @@ class NeuroGardenEnv(gymnasium.Env):
         self._tracker.update(result.events, body)
         self._prev_body = body
         self._steps += 1
-        self._done = died
         truncated = not died and self._steps >= self.max_steps
+        self._done = died or truncated
+        self._terminated = died
+        self._truncated = truncated
         return self._observation, reward, died, truncated, self._info(events)
 
     def render(self):
