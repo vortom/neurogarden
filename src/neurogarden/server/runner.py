@@ -81,6 +81,9 @@ class WorldRunner:
             self._note(self._chronicler.reattached(self.world.tick, self._subject(agent_id)))
 
     def detach(self, port) -> None:
+        # A leave cancels a join the same connection queued in this tick: no fly is hatched
+        # for a client that changed its mind before the world advanced.
+        self._queued_joins = [entry for entry in self._queued_joins if entry[0] is not port]
         agent_id = self.roster.live_agent(port.owner)
         was_attached = self.roster.port_for(agent_id) is port if agent_id is not None else False
         self.roster.detach(port)

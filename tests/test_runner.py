@@ -153,6 +153,17 @@ def test_leave_then_join_reattaches_the_same_port_and_notes_it_once():
     assert len(notes) == 1
 
 
+def test_a_leave_cancels_a_join_queued_in_the_same_tick():
+    runner = make_runner()
+    port = FakePort("alice")
+    runner.attach(port)
+    runner.request_join(port)
+    runner.detach(port)  # the client changed its mind before the world advanced
+    runner.tick()
+    assert port.of("joined") == [] and runner.roster.live_agent("alice") is None
+    assert runner.world.state.agents == {}
+
+
 def test_a_superseded_port_cannot_take_the_fly_back_with_a_queued_join():
     runner = make_runner()
     old = joined_agent(runner)
