@@ -1,8 +1,10 @@
 import numpy as np
 
 from neurogarden.brains import BRAINS, RandomBrain, ScriptedBrain, run_episode
+from neurogarden.brains.base import brain_seed
 from neurogarden.dojo import NeuroGardenEnv
 from neurogarden.engine import Action
+from neurogarden.engine.rng import SplitMix64
 from neurogarden.engine.tiles import Terrain
 
 
@@ -12,10 +14,11 @@ def observation(
     light=1000,
     smell=None,
     blocked=(),
+    terrain_default=Terrain.GROUND,
 ):
-    """A hand-built observation: open ground all around unless `blocked` directions."""
+    """A hand-built observation: open `terrain_default` all around unless `blocked` directions."""
     vision = np.zeros((7, 7, 3), dtype=np.uint8)
-    vision[:, :, 0] = Terrain.GROUND
+    vision[:, :, 0] = terrain_default
     vision[3, 3, 2] = 1
     for direction in blocked:
         dx, dy = ((0, -1), (1, 0), (0, 1), (-1, 0))[direction]
@@ -73,6 +76,19 @@ def test_rule_4_tired_keeps_resting_until_rested():
     assert brain.act(observation(body=(700, 700, 750, 1000, 0), touch=on_nest)) != Action.REST
 
 
+def test_rules_3_and_4_treat_void_terrain_as_walkable_unknown():
+    brain = ScriptedBrain()
+    fruit_smell = [[500, 0, 600, 0, 0], [0] * 5, [0] * 5]  # fruit is stronger to the east
+    urgent = observation(
+        body=(200, 700, 800, 1000, 0), light=0, smell=fruit_smell, terrain_default=Terrain.VOID
+    )
+    assert brain.act(urgent) == Action.MOVE_E  # rule 3: forages through unseen tiles at night
+
+    nest_smell = [[0] * 5, [0] * 5, [500, 0, 0, 0, 600]]  # nest is stronger to the west
+    homebound = observation(light=0, smell=nest_smell, terrain_default=Terrain.VOID)
+    assert brain.act(homebound) == Action.MOVE_W  # rule 4: follows the nest scent home
+
+
 def test_rule_5_serves_the_lower_need_and_only_steps_onto_walkable_tiles():
     brain = ScriptedBrain()
     smell = [[100, 900, 0, 0, 0], [100, 0, 0, 0, 900], [0] * 5]
@@ -106,3 +122,13 @@ def test_run_episode_returns_stats_and_is_reproducible():
 
 def test_registry_lists_both_brains():
     assert set(BRAINS) == {"random", "scripted"}
+
+
+def test_brain_seed_decorrelates_from_the_world_seed():
+    assert brain_seed(None) is None
+    for seed in (0, 1, 42):
+        derived = brain_seed(seed)
+        assert derived != seed
+        world_stream = [SplitMix64(seed).next_u64() for _ in range(3)]
+        brain_stream = [SplitMix64(derived).next_u64() for _ in range(3)]
+        assert world_stream != brain_stream

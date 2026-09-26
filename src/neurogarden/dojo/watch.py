@@ -10,6 +10,7 @@ import sys
 import time
 
 from neurogarden.brains import BRAINS
+from neurogarden.brains.base import brain_seed
 
 from .env import NeuroGardenEnv
 from .render_ansi import render
@@ -29,23 +30,24 @@ def main(argv: list[str] | None = None) -> int:
     env = NeuroGardenEnv(max_steps=args.max_steps)
     brain = BRAINS[args.brain](seed=args.seed)
     observation, info = env.reset(seed=args.seed)
-    brain.reset(args.seed)
+    brain.reset(brain_seed(args.seed))
+
+    def draw() -> None:
+        frame = render(env.world, env.agent_id, ascii=args.ascii)
+        sys.stdout.write(f"{_HOME_AND_CLEAR}{frame}\n")
+        sys.stdout.flush()
+
     try:
+        draw()
         while True:
-            frame = render(env.world, env.agent_id, ascii=args.ascii)
-            sys.stdout.write(f"{_HOME_AND_CLEAR}{frame}\n")
-            sys.stdout.flush()
             observation, _, terminated, truncated, info = env.step(brain.act(observation))
+            draw()  # after every step, so truncation and death both show their final frame
             if terminated or truncated:
                 break
             if args.tps > 0:
                 time.sleep(1.0 / args.tps)
     except KeyboardInterrupt:
         pass
-    if not env.world.state.agents[env.agent_id].alive:
-        frame = render(env.world, env.agent_id, ascii=args.ascii)  # the death frame is reachable
-        sys.stdout.write(f"{_HOME_AND_CLEAR}{frame}\n")
-        sys.stdout.flush()
     stats = info["stats"]
     causes = ", ".join(stats.death_causes) or "still alive"
     print(f"\n{args.brain}: lived {stats.lifespan} ticks ({stats.days} days) | {causes}")

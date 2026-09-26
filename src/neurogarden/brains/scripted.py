@@ -7,7 +7,7 @@ import numpy as np
 from neurogarden.engine.body import DIRECTIONS, VISION_SIZE, Action
 from neurogarden.engine.config import NIGHT_LIGHT_THRESHOLD
 from neurogarden.engine.rng import SplitMix64
-from neurogarden.engine.tiles import WALKABLE, Resource
+from neurogarden.engine.tiles import WALKABLE, Resource, Terrain
 
 _FRUIT, _HUMIDITY, _NEST = 0, 1, 2  # rows of the smell channel
 _MOVES = (Action.MOVE_N, Action.MOVE_E, Action.MOVE_S, Action.MOVE_W)
@@ -85,7 +85,8 @@ class ScriptedBrain:
     def _walkable(self, observation: dict[str, np.ndarray], direction: int) -> bool:
         dx, dy = DIRECTIONS[direction]
         terrain, _, occupant = observation["vision"][_CENTRE + dy, _CENTRE + dx]
-        return terrain in WALKABLE and occupant == 0
+        # VOID means unseen, not blocked: beyond the vision radius the fly still gambles on it.
+        return (terrain in WALKABLE or terrain == Terrain.VOID) and occupant == 0
 
     def _follow(self, observation: dict[str, np.ndarray], scent: int) -> Action | None:
         """Step to the walkable neighbour whose scent beats the own tile, if any."""
