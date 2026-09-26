@@ -1,5 +1,6 @@
 import dataclasses
 
+import numpy as np
 import pytest
 
 from neurogarden.engine.config import RULES_VERSION, Config
@@ -51,3 +52,25 @@ def test_dict_round_trip():
 def test_from_dict_rejects_unknown_fields():
     with pytest.raises(ValueError):
         Config.from_dict({"wings": 2})
+
+
+def test_fruit_bites_is_bounded_by_the_resource_amount_dtype():
+    Config(fruit_bites=32767)  # int16 max: still fine
+    with pytest.raises(ValueError):
+        Config(fruit_bites=32768)
+
+
+def test_fruit_lifetime_is_bounded_by_the_resource_age_dtype():
+    Config(fruit_lifetime=2**31 - 1)  # int32 max: still fine
+    with pytest.raises(ValueError):
+        Config(fruit_lifetime=2**31)
+
+
+def test_numpy_integers_are_accepted_and_coerced_to_plain_int():
+    cfg = Config(fruit_bites=np.int64(3))
+    assert cfg.fruit_bites == 3
+    assert type(cfg.fruit_bites) is int
+    with pytest.raises(ValueError):
+        Config(fruit_bites=3.0)
+    with pytest.raises(ValueError):
+        Config(fruit_bites=True)

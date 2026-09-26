@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numbers
 from dataclasses import dataclass
 
 import numpy as np
@@ -63,6 +64,9 @@ class World:
         if at is None:
             at = self._default_spawn_tile()
         x, y = at
+        for coordinate in (x, y):
+            if isinstance(coordinate, bool) or not isinstance(coordinate, numbers.Integral):
+                raise ValueError(f"spawn coordinates must be integers, got {at!r}")
         x, y = int(x), int(y)  # numpy ints must never reach the snapshot
         if not state.walkable(x, y) or state.occupant[y, x] != 0:
             raise ValueError(f"cannot spawn at {at}: tile is not walkable or is occupied")
@@ -95,7 +99,10 @@ class World:
         raise ValueError("no free walkable tile to spawn on")
 
     def observe(self, agent_id: int) -> dict[str, np.ndarray]:
-        return observe(self._state, self._scents, self._agent(agent_id))
+        agent = self._agent(agent_id)
+        if not agent.alive:
+            raise ValueError(f"agent {agent_id} is dead")
+        return observe(self._state, self._scents, agent)
 
     def step(self, actions: dict[int, int]) -> StepResult:
         state = self._state

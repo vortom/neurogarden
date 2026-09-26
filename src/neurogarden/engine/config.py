@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numbers
 from dataclasses import asdict, dataclass, fields
 
 # Bump on any change that alters state evolution or observations for identical inputs.
@@ -11,6 +12,10 @@ NEED_MAX = 1000
 LIGHT_MAX = 1000
 NIGHT_LIGHT_THRESHOLD = 500
 MAX_VISION_RADIUS = 3
+# resource_amount and resource_age dtypes (see snapshot.LAYERS): fruit_bites and
+# fruit_lifetime are stored there and must fit.
+_INT16_MAX = 32767
+_INT32_MAX = 2**31 - 1
 
 _POSITIVE = (
     "fruit_bites",
@@ -85,8 +90,10 @@ class Config:
             value = getattr(self, f.name)
             if f.name == "max_age" and value is None:
                 continue
-            if not isinstance(value, int) or isinstance(value, bool):
+            if isinstance(value, bool) or not isinstance(value, numbers.Integral):
                 raise ValueError(f"{f.name} must be an int, got {value!r}")
+            if type(value) is not int:  # numpy ints must never reach a snapshot or to_dict()
+                object.__setattr__(self, f.name, int(value))
         if self.max_age is not None and self.max_age <= 0:
             raise ValueError("max_age must be positive or None")
         for name in _INITIAL:
@@ -106,6 +113,10 @@ class Config:
             raise ValueError("fruit_spawn_permille must be in 0..1000")
         if self.tree_initial_fruit > self.tree_max_fruit:
             raise ValueError("tree_initial_fruit must not exceed tree_max_fruit")
+        if self.fruit_bites > _INT16_MAX:
+            raise ValueError(f"fruit_bites must be <= {_INT16_MAX} (resource_amount is int16)")
+        if self.fruit_lifetime > _INT32_MAX:
+            raise ValueError(f"fruit_lifetime must be <= {_INT32_MAX} (resource_age is int32)")
 
     def to_dict(self) -> dict:
         return asdict(self)

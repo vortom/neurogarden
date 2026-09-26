@@ -23,6 +23,8 @@ def _run(replay: dict, on_checkpoint) -> None:
         agent_ids.append(world.spawn(body=spawn["body"], at=at))
     every = replay["checkpoint_every"]
     for actions in replay["actions"]:
+        if len(actions) != len(agent_ids):
+            raise ValueError(f"tick has {len(actions)} action(s) but {len(agent_ids)} spawn(s)")
         world.step(dict(zip(agent_ids, actions, strict=True)))
         if world.tick % every == 0 or world.tick == len(replay["actions"]):
             on_checkpoint(world.tick, world.state_hash())
@@ -37,12 +39,14 @@ def record(
     checkpoint_every: int = 100,
 ) -> dict:
     """Run the actions (one list per tick, aligned with `spawns`) and return the replay."""
+    if checkpoint_every <= 0:
+        raise ValueError("checkpoint_every must be positive")
     replay = {
         "rules_version": RULES_VERSION,
         "config": (config or Config()).to_dict(),
         "map": map_text,
         "seed": seed,
-        "spawns": spawns or [{"body": "fly", "at": None}],
+        "spawns": spawns if spawns is not None else [{"body": "fly", "at": None}],
         "actions": [list(tick_actions) for tick_actions in actions],
         "checkpoint_every": checkpoint_every,
         "checkpoints": {},

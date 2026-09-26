@@ -103,3 +103,24 @@ def test_restore_rejects_other_rules_versions():
     data["rules_version"] += 1
     with pytest.raises(ValueError):
         restore(data)
+
+
+def test_restore_rejects_an_extra_agent_key():
+    data = snapshot(make())
+    data["agents"][0]["wings"] = 2
+    with pytest.raises(ValueError, match="wings"):
+        restore(data)
+
+
+def test_restore_rejects_a_missing_layer():
+    data = snapshot(make())
+    del data["layers"]["terrain"]
+    with pytest.raises(ValueError, match="terrain"):
+        restore(data)
+
+
+def test_restore_rejects_a_missing_top_level_key():
+    data = snapshot(make())
+    del data["tick"]
+    with pytest.raises(ValueError, match="tick"):
+        restore(data)

@@ -96,3 +96,19 @@ def test_no_max_age_by_default():
     agent.age = 10**9
     metabolise(state, agent, Action.IDLE, [])
     assert agent.alive
+
+
+def test_death_lists_old_age_alongside_need_causes():
+    state, agent = make(satiety=1, health=5, max_age=1)  # age 0 -> 1 hits max_age this tick too
+    events = []
+    metabolise(state, agent, Action.IDLE, events)
+    assert not agent.alive
+    assert events[-1].data == {"causes": ["starvation", "old_age"]}
+
+
+def test_zero_starve_damage_skips_the_damaged_event_but_still_reports_the_depletion():
+    state, agent = make(satiety=1, starve_damage=0)
+    events = []
+    metabolise(state, agent, Action.IDLE, events)
+    assert agent.health == 1000
+    assert [e.type for e in events] == ["need_depleted"]

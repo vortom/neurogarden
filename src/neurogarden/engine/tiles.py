@@ -72,3 +72,12 @@ def parse_map(text: str) -> ParsedMap:
 def find_tiles(terrain: np.ndarray, kind: Terrain) -> tuple[tuple[int, int], ...]:
     """(x, y) of every tile of the given terrain, in row-major order."""
     return tuple((int(x), int(y)) for y, x in np.argwhere(terrain == kind))
+
+
+def clip_window(shape: tuple[int, int], x: int, y: int, r: int) -> tuple[int, int, int, int]:
+    """Bounds x0, x1, y0, y1 of a (2r+1)x(2r+1) window centred on (x, y), clipped to shape.
+
+    shape is (height, width), matching an array's .shape.
+    """
+    height, width = shape
+    return max(0, x - r), min(width, x + r + 1), max(0, y - r), min(height, y + r + 1)

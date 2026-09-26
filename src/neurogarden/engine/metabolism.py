@@ -46,16 +46,20 @@ def metabolise(state: WorldState, agent: Agent, action: Action, events: list[Eve
     if depleted:
         amount = min(agent.health, cfg.starve_damage * len(depleted))
         agent.health -= amount
-        data = {"amount": amount, "causes": list(depleted)}
-        events.append(Event(state.tick, "damaged", agent.id, data))
+        if amount > 0:
+            data = {"amount": amount, "causes": list(depleted)}
+            events.append(Event(state.tick, "damaged", agent.id, data))
     elif min(agent.satiety, agent.hydration, agent.energy) >= cfg.regen_threshold:
         agent.health = min(NEED_MAX, agent.health + cfg.regen_amount)
 
     agent.age += 1
-    if agent.health == 0:
-        _die(state, agent, depleted, events)
-    elif cfg.max_age is not None and agent.age >= cfg.max_age:
-        _die(state, agent, ["old_age"], events)
+    health_dead = agent.health == 0
+    old_age_dead = cfg.max_age is not None and agent.age >= cfg.max_age
+    if health_dead or old_age_dead:
+        causes = list(depleted)
+        if old_age_dead:
+            causes.append("old_age")
+        _die(state, agent, causes, events)
 
 
 def _die(state: WorldState, agent: Agent, causes: list[str], events: list[Event]) -> None:

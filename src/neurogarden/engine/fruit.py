@@ -6,7 +6,7 @@ import numpy as np
 
 from .events import Event
 from .state import WorldState
-from .tiles import Resource, Terrain
+from .tiles import Resource, Terrain, clip_window
 
 
 def add_fruit(state: WorldState, x: int, y: int) -> None:
@@ -23,25 +23,15 @@ def remove_fruit(state: WorldState, x: int, y: int) -> None:
     state.fruit_version += 1
 
 
-def _window(state: WorldState, tx: int, ty: int) -> tuple[int, int, int, int]:
-    r = state.config.tree_radius
-    return (
-        max(0, tx - r),
-        min(state.width, tx + r + 1),
-        max(0, ty - r),
-        min(state.height, ty + r + 1),
-    )
-
-
 def fruit_near(state: WorldState, tx: int, ty: int) -> int:
     """Fruits of any origin within tree_radius (Chebyshev) of the tree."""
-    x0, x1, y0, y1 = _window(state, tx, ty)
+    x0, x1, y0, y1 = clip_window((state.height, state.width), tx, ty, state.config.tree_radius)
     return int((state.resource_kind[y0:y1, x0:x1] == Resource.FRUIT).sum())
 
 
 def fruit_candidates(state: WorldState, tx: int, ty: int) -> list[tuple[int, int]]:
     """Ground tiles without a resource near the tree, row-major. Occupied tiles count."""
-    x0, x1, y0, y1 = _window(state, tx, ty)
+    x0, x1, y0, y1 = clip_window((state.height, state.width), tx, ty, state.config.tree_radius)
     free = (state.terrain[y0:y1, x0:x1] == Terrain.GROUND) & (
         state.resource_kind[y0:y1, x0:x1] == Resource.NONE
     )

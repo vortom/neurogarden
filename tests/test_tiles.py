@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from neurogarden.engine.tiles import MapError, Terrain, find_tiles, parse_map
+from neurogarden.engine.tiles import MapError, Terrain, clip_window, find_tiles, parse_map
 
 SMALL = """
 #####
@@ -53,3 +53,9 @@ def test_unknown_character_reports_line_and_column():
 def test_find_tiles_is_row_major_xy():
     terrain = parse_map("T.T\n.T.").terrain
     assert find_tiles(terrain, Terrain.TREE) == ((0, 0), (2, 0), (1, 1))
+
+
+def test_clip_window_at_a_corner_and_in_the_middle():
+    shape = (5, 7)  # height, width
+    assert clip_window(shape, 0, 0, 2) == (0, 3, 0, 3)  # clipped by the top-left corner
+    assert clip_window(shape, 3, 2, 1) == (2, 5, 1, 4)  # fully inside: no clipping

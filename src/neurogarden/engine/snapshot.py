@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import struct
-from dataclasses import asdict
+from dataclasses import asdict, fields
 
 import numpy as np
 
@@ -22,6 +22,21 @@ LAYERS = (
     ("resource_age", "<i4"),
     ("occupant", "<i4"),
 )
+
+_TOP_LEVEL_KEYS = frozenset(
+    {
+        "rules_version",
+        "config",
+        "tick",
+        "rng_state",
+        "width",
+        "height",
+        "layers",
+        "agents",
+        "next_agent_id",
+    }
+)
+_AGENT_KEYS = frozenset(f.name for f in fields(Agent))
 
 
 def _layer_bytes(state: WorldState, name: str, dtype: str) -> bytes:
@@ -46,7 +61,22 @@ def snapshot(state: WorldState) -> dict:
     }
 
 
+def _validate(data: dict) -> None:
+    missing = _TOP_LEVEL_KEYS - set(data)
+    if missing:
+        raise ValueError(f"snapshot missing key(s): {sorted(missing)}")
+    missing_layers = {name for name, _ in LAYERS} - set(data["layers"])
+    if missing_layers:
+        raise ValueError(f"snapshot missing layer(s): {sorted(missing_layers)}")
+    for entry in data["agents"]:
+        keys = set(entry)
+        if keys != _AGENT_KEYS:
+            offending = sorted(keys ^ _AGENT_KEYS)
+            raise ValueError(f"agent snapshot has unexpected or missing key(s): {offending}")
+
+
 def restore(data: dict) -> WorldState:
+    _validate(data)
     if data["rules_version"] != RULES_VERSION:
         raise ValueError(
             f"snapshot has rules_version {data['rules_version']}, engine is {RULES_VERSION}"

@@ -106,6 +106,15 @@ def test_death_gives_one_final_observation_then_silence():
     assert after.observations == {} and after.agent_events == {}
 
 
+def test_observe_rejects_a_dead_agent():
+    world = World.from_map(MAP, Config(initial_satiety=1, initial_health=5))
+    fly = world.spawn()
+    world.step({fly: Action.IDLE})
+    assert not world.state.agents[fly].alive
+    with pytest.raises(ValueError):
+        world.observe(fly)
+
+
 def test_two_agents_never_share_a_tile_and_the_loser_bumps():
     outcomes = set()
     for seed in range(20):
@@ -181,3 +190,9 @@ def test_spawn_coordinates_are_coerced_to_python_ints():
     world = World.from_map(MAP)
     world.spawn(at=(np.int64(1), np.int64(1)))
     json.dumps(world.snapshot())
+
+
+def test_spawn_rejects_non_integral_coordinates():
+    world = World.from_map(MAP)
+    with pytest.raises(ValueError):
+        world.spawn(at=(1.9, 1.2))

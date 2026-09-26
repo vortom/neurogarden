@@ -11,7 +11,7 @@ from .body import DIRECTIONS, INT32_MAX, VISION_SIZE
 from .clock import light_at
 from .config import LIGHT_MAX, NEED_MAX
 from .state import Agent, WorldState
-from .tiles import Resource, Terrain, find_tiles
+from .tiles import Resource, Terrain, clip_window, find_tiles
 
 SCENTS = ("fruit", "humidity", "nest")
 _CENTRE = VISION_SIZE // 2
@@ -75,12 +75,10 @@ def vision_radius(light: int, state: WorldState) -> int:
     return cfg.vision_radius_night + span * light // LIGHT_MAX
 
 
-def _window(array: np.ndarray, x: int, y: int, r: int, fill: int) -> np.ndarray:
+def _cutout(array: np.ndarray, x: int, y: int, r: int, fill: int) -> np.ndarray:
     """(2r+1, 2r+1) cut-out centred on (x, y); out-of-bounds cells get `fill`."""
-    height, width = array.shape
     out = np.full((2 * r + 1, 2 * r + 1), fill, dtype=array.dtype)
-    x0, x1 = max(0, x - r), min(width, x + r + 1)
-    y0, y1 = max(0, y - r), min(height, y + r + 1)
+    x0, x1, y0, y1 = clip_window(array.shape, x, y, r)
     out[y0 - (y - r) : y1 - (y - r), x0 - (x - r) : x1 - (x - r)] = array[y0:y1, x0:x1]
     return out
 
@@ -89,9 +87,9 @@ def _vision(state: WorldState, agent: Agent, light: int) -> np.ndarray:
     vision = np.zeros((VISION_SIZE, VISION_SIZE, 3), dtype=np.uint8)  # VOID beyond the radius
     r = vision_radius(light, state)
     lo, hi = _CENTRE - r, _CENTRE + r + 1
-    vision[lo:hi, lo:hi, 0] = _window(state.terrain, agent.x, agent.y, r, Terrain.ROCK)
-    vision[lo:hi, lo:hi, 1] = _window(state.resource_kind, agent.x, agent.y, r, Resource.NONE)
-    others = _window(state.occupant, agent.x, agent.y, r, 0) != 0
+    vision[lo:hi, lo:hi, 0] = _cutout(state.terrain, agent.x, agent.y, r, Terrain.ROCK)
+    vision[lo:hi, lo:hi, 1] = _cutout(state.resource_kind, agent.x, agent.y, r, Resource.NONE)
+    others = _cutout(state.occupant, agent.x, agent.y, r, 0) != 0
     vision[lo:hi, lo:hi, 2] = others * 2
     vision[_CENTRE, _CENTRE, 2] = 1  # self
     return vision

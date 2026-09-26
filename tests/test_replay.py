@@ -63,3 +63,21 @@ def test_golden_replay_still_reproduces():
     """Fails when engine behaviour changed. If the change is intentional, bump
     RULES_VERSION and regenerate with `uv run python tests/make_golden.py`."""
     verify(json.loads(GOLDEN.read_text(encoding="utf-8")))
+
+
+def test_checkpoint_every_must_be_positive():
+    with pytest.raises(ValueError):
+        record(MAP, seed=0, actions=[[0]], checkpoint_every=0)
+
+
+def test_explicit_empty_spawns_are_respected_not_replaced_by_the_default_fly():
+    replay = record(MAP, seed=0, actions=[[], []], spawns=[])
+    assert replay["spawns"] == []
+    verify(replay)  # zero agents, zero actions per tick: nothing to zip
+
+
+def test_verify_rejects_a_replay_whose_action_count_does_not_match_the_spawns():
+    replay = small_replay()
+    replay["actions"][0] = [*replay["actions"][0], 0]  # one spawn, two actions on tick 0
+    with pytest.raises(ValueError):
+        verify(replay)
