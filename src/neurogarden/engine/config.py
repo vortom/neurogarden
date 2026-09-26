@@ -6,7 +6,7 @@ import numbers
 from dataclasses import asdict, dataclass, fields
 
 # Bump on any change that alters state evolution or observations for identical inputs.
-RULES_VERSION = 1
+RULES_VERSION = 2  # 2: default spawns hatch next to the nest instead of the first free tile
 
 NEED_MAX = 1000
 LIGHT_MAX = 1000

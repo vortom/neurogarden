@@ -39,12 +39,16 @@ def test_spawn_defaults_to_the_nest_facing_south_with_initial_needs():
     assert world.state.occupant[2, 2] == 1
 
 
-def test_second_spawn_falls_back_to_the_first_free_walkable_tile():
+def test_later_spawns_hatch_next_to_the_nest_not_in_a_corner():
     world = World.from_map(MAP)
     world.spawn()
-    second = world.spawn()
-    agent = world.state.agents[second]
-    assert second == 2 and (agent.x, agent.y) == (1, 1)
+    positions = [(a.x, a.y) for a in (world.state.agents[world.spawn()] for _ in range(4))]
+    # nest at (2, 2): north, east, south, west neighbours in BFS order
+    assert positions == [(2, 1), (3, 2), (2, 3), (1, 2)]
+    nestless = World.from_map("...\n...")
+    nestless.spawn()
+    agent = nestless.state.agents[nestless.spawn()]
+    assert (agent.x, agent.y) == (1, 0)  # no nest: row-major fallback
 
 
 def test_bad_spawns_are_value_errors():

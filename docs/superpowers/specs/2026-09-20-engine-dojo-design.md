@@ -145,7 +145,10 @@ Needs (`satiety`, `hydration`, `energy`) and `health` live in `[0, 1000]`.
 **Health is a consequence, not a need:** needs → health → death.
 
 `World.spawn(body="fly", at=None)`: position `at`; without `at`, the nest tile
-if it is free, else the first free walkable tile in row-major order. Raises
+if it is free, else the free walkable tile nearest the nest (breadth-first from
+the nest, neighbours in N/E/S/W order — flies hatch beside the nest, not in a
+corner; `RULES_VERSION` 2), else, with no nest, the first free walkable tile
+in row-major order. Raises
 `ValueError` if `at` is not walkable or is occupied, or if no tile is free. Initial values come from `Config`; initial
 facing is `S`.
 
@@ -296,7 +299,8 @@ observations describe the world after the step (`t + 1`).
   (little-endian, C order), `u32 next_agent_id`, `u32 agent_count`, then each
   agent in ascending id as little-endian `i64` fields `id, body_index, x, y,
   facing, satiety, hydration, energy, health, age, alive, bumped`.
-- **`RULES_VERSION`** (int, starts at 1) is bumped by any change that alters
+- **`RULES_VERSION`** (int; 1 at first release, 2 since the nest-adjacent
+  spawn rule of sub-project 2) is bumped by any change that alters
   state evolution or observations for identical inputs.
 - **Replay** (JSON-serialisable dict): `rules_version`, config, map text, seed,
   spawns, per-tick action lists, and `{tick: state_hash}` checkpoints.

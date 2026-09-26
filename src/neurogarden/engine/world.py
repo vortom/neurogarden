@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import numbers
+from collections import deque
 from dataclasses import dataclass
 
 import numpy as np
 
 from . import snapshot as _snapshot
 from .actions import apply_action
-from .body import Action, get_body
+from .body import DIRECTIONS, Action, get_body
 from .config import Config
 from .events import Event, for_agent
 from .fruit import seed_initial_fruit, update_fruit
@@ -88,11 +89,21 @@ class World:
         return agent.id
 
     def _default_spawn_tile(self) -> tuple[int, int]:
+        """The nest, else the free walkable tile nearest the nest (BFS, N/E/S/W order)."""
         state = self._state
-        for x, y in find_tiles(state.terrain, Terrain.NEST):
+        nests = list(find_tiles(state.terrain, Terrain.NEST))
+        queue = deque(nests)
+        seen = set(nests)
+        while queue:
+            x, y = queue.popleft()
             if state.occupant[y, x] == 0:
                 return x, y
-        for y in range(state.height):
+            for dx, dy in DIRECTIONS:
+                nx, ny = x + dx, y + dy
+                if (nx, ny) not in seen and state.walkable(nx, ny):
+                    seen.add((nx, ny))
+                    queue.append((nx, ny))
+        for y in range(state.height):  # no nest, or everything around it is taken
             for x in range(state.width):
                 if state.walkable(x, y) and state.occupant[y, x] == 0:
                     return x, y

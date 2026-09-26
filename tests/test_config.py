@@ -12,7 +12,7 @@ def test_defaults_are_valid_and_match_spec():
     assert (cfg.energy_move, cfg.energy_move_night) == (-2, -4)
     assert cfg.max_age is None
     assert cfg.day_length == 1200
-    assert RULES_VERSION == 1
+    assert RULES_VERSION == 2
 
 
 def test_config_is_frozen():
