@@ -63,6 +63,7 @@ class World:
         if at is None:
             at = self._default_spawn_tile()
         x, y = at
+        x, y = int(x), int(y)  # numpy ints must never reach the snapshot
         if not state.walkable(x, y) or state.occupant[y, x] != 0:
             raise ValueError(f"cannot spawn at {at}: tile is not walkable or is occupied")
         cfg = state.config

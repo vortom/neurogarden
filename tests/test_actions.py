@@ -1,3 +1,5 @@
+import numpy as np
+
 from neurogarden.engine.actions import apply_action, water_adjacent
 from neurogarden.engine.body import Action
 from neurogarden.engine.config import Config
@@ -138,3 +140,26 @@ def test_invalid_action_becomes_idle_with_an_event():
     assert apply_action(state, agent, 99, events) == Action.IDLE
     assert [(e.type, e.data) for e in events] == [("invalid_action", {"action": "99"})]
     assert (agent.x, agent.y) == (2, 1)
+
+
+def test_non_integral_actions_are_rejected_as_invalid():
+    for action in (3.0, True, "1"):
+        state, agent = make()
+        events = []
+        assert apply_action(state, agent, action, events) == Action.IDLE
+        assert events[0].type == "invalid_action"
+
+
+def test_numpy_integer_actions_are_accepted():
+    state, agent = make()
+    events = []
+    assert apply_action(state, agent, np.int64(2), events) == Action.MOVE_E
+
+
+def test_invalid_action_value_is_truncated_to_32_characters():
+    state, agent = make()
+    events = []
+    long_action = "x" * 50
+    apply_action(state, agent, long_action, events)
+    assert events[0].data == {"action": long_action[:32]}
+    assert len(events[0].data["action"]) == 32

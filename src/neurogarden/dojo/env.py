@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import gymnasium
 import numpy as np
 from gymnasium import spaces
@@ -103,7 +105,7 @@ class NeuroGardenEnv(gymnasium.Env):
     def _info(self, events: list) -> dict:
         return {
             "events": events,
-            "stats": self._tracker.stats,
+            "stats": dataclasses.replace(self._tracker.stats),  # snapshot: never the live tracker
             "tick": self.world.tick,
             "day": day_number(self.world.tick, self.config),
         }

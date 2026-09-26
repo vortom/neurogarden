@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import numbers
+
 from .body import DIRECTIONS, MOVE_DIRECTION, Action
 from .config import NEED_MAX
 from .events import Event
@@ -18,13 +20,23 @@ def water_adjacent(state: WorldState, x: int, y: int) -> bool:
     return False
 
 
+def _coerce_action(action: object) -> Action | None:
+    """Action for a strictly integral id (numpy ints included, bool excluded); None if invalid."""
+    if not isinstance(action, numbers.Integral) or isinstance(action, bool):
+        return None
+    try:
+        return Action(int(action))
+    except ValueError:
+        return None
+
+
 def apply_action(state: WorldState, agent: Agent, action: int, events: list[Event]) -> Action:
     """Apply the action and return the effective one (IDLE for an invalid id)."""
     agent.bumped = False
-    try:
-        act = Action(action)
-    except ValueError:
-        events.append(Event(state.tick, "invalid_action", agent.id, {"action": str(action)}))
+    act = _coerce_action(action)
+    if act is None:
+        data = {"action": str(action)[:32]}
+        events.append(Event(state.tick, "invalid_action", agent.id, data))
         return Action.IDLE
     if act in MOVE_DIRECTION:
         _move(state, agent, MOVE_DIRECTION[act], events)

@@ -8,9 +8,10 @@ from gymnasium import spaces
 
 from neurogarden.engine.body import VISION_SIZE
 from neurogarden.engine.config import LIGHT_MAX, NEED_MAX
+from neurogarden.engine.tiles import Resource, Terrain
 
 DEFAULT_AGE_SCALE = 12000
-_VISION_CLASSES = (6, 2, 3)  # terrain, resource, occupant classes per vision layer
+_VISION_CLASSES = (len(Terrain), len(Resource), 3)  # 3 = occupant classes: none/self/other
 _BASE_SIZE = 15 + 4 + 5 + 1
 
 

@@ -42,6 +42,10 @@ def main(argv: list[str] | None = None) -> int:
                 time.sleep(1.0 / args.tps)
     except KeyboardInterrupt:
         pass
+    if not env.world.state.agents[env.agent_id].alive:
+        frame = render(env.world, env.agent_id, ascii=args.ascii)  # the death frame is reachable
+        sys.stdout.write(f"{_HOME_AND_CLEAR}{frame}\n")
+        sys.stdout.flush()
     stats = info["stats"]
     causes = ", ".join(stats.death_causes) or "still alive"
     print(f"\n{args.brain}: lived {stats.lifespan} ticks ({stats.days} days) | {causes}")

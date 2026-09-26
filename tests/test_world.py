@@ -175,3 +175,9 @@ def test_fuzz_invariants_hold_under_random_actions():
                 assert event.agent_id == agent_id
                 assert not ({"x", "y", "from", "to"} & set(event.data))
         json.dumps([dataclasses.asdict(e) for e in result.events])  # what spectators/storage do
+
+
+def test_spawn_coordinates_are_coerced_to_python_ints():
+    world = World.from_map(MAP)
+    world.spawn(at=(np.int64(1), np.int64(1)))
+    json.dumps(world.snapshot())

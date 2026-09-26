@@ -35,6 +35,12 @@ def test_snapshot_survives_json():
     assert json.loads(json.dumps(data)) == data
 
 
+def test_rng_state_is_a_decimal_string():
+    data = snapshot(make())
+    assert isinstance(data["rng_state"], str)
+    assert data["rng_state"].isdigit()
+
+
 def test_restore_reproduces_the_state_exactly():
     original = make()
     copy = restore(json.loads(json.dumps(snapshot(original))))

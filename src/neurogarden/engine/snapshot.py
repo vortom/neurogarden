@@ -34,7 +34,7 @@ def snapshot(state: WorldState) -> dict:
         "rules_version": RULES_VERSION,
         "config": state.config.to_dict(),
         "tick": state.tick,
-        "rng_state": state.rng.state,
+        "rng_state": str(state.rng.state),  # a u64 exceeds JavaScript number precision
         "width": state.width,
         "height": state.height,
         "layers": {
@@ -59,7 +59,7 @@ def restore(data: dict) -> WorldState:
         for name, dtype in LAYERS
     }
     rng = SplitMix64(0)
-    rng.state = data["rng_state"]
+    rng.state = int(data["rng_state"])
     agents = {entry["id"]: Agent(**entry) for entry in data["agents"]}
     return WorldState(
         config=Config.from_dict(data["config"]),

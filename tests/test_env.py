@@ -93,6 +93,17 @@ def test_reward_is_pluggable_and_events_carry_no_coordinates():
     assert info["stats"].tiles_explored == 2
 
 
+def test_info_stats_is_a_snapshot_not_the_live_tracker():
+    env = NeuroGardenEnv(map=TINY)
+    env.reset(seed=0)
+    _, _, _, _, info1 = env.step(Action.IDLE)
+    stats1 = info1["stats"]
+    _, _, _, _, info2 = env.step(Action.IDLE)
+    stats2 = info2["stats"]
+    assert stats1 is not stats2
+    assert stats1.lifespan == 1
+
+
 def test_default_reward_is_wellbeing():
     env = NeuroGardenEnv(map=TINY)
     env.reset(seed=0)
