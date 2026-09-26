@@ -14,10 +14,10 @@ The first world is **Drosoville**.
 
 ## Status
 
-Sub-projects 1 and 2 of 5: the simulation **engine**, the training **dojo**, and
-the **live world** — a server, a wire protocol and a Python SDK, so several brains
-can live in one Drosoville at the same time. No web client yet (sub-project 3);
-see `docs/superpowers/specs/`.
+Sub-projects 1–3 of 5: the simulation **engine**, the training **dojo**, the
+**live world** — a server, a wire protocol and a Python SDK, so several brains
+can live in one Drosoville at the same time — and the **browser client**, a
+pixel-art view of the garden you can also play in. See `docs/superpowers/specs/`.
 
 ## Quick start: a live garden
 
@@ -28,6 +28,12 @@ uv run neurogarden join --owner alice --brain scripted     # in another terminal
 uv run neurogarden join --owner bob --brain random         # and another
 uv run neurogarden watch --follow alice                    # and watch them all
 ```
+
+Then open **http://127.0.0.1:8765/**: the server serves a small pixel-art page —
+the garden, every fly with its mood bubble, the naturalist's log, a leaderboard
+and day/night. Type a name and *Hatch a fly* to play one yourself: arrows move,
+space eats or drinks, R rests; your fly speaks the same protocol as any brain.
+When it dies you get an obituary and can hatch again.
 
 The spectator shows the map, every fly's needs and mood (🍎 hungry, 💧 thirsty,
 💤 sleepy, ❗ desperate, ☠️ dying, ✨ content), who is connected, a leaderboard,
@@ -107,4 +113,13 @@ obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
 uv run pytest                 # everything, including the slow balance guard
 uv run pytest -m "not slow"   # fast loop
 uv run ruff check .
+```
+
+The browser client lives in `web/` (Vite + TypeScript, no framework):
+
+```bash
+cd web && npm install
+npm test          # vitest
+npm run types     # regenerate src/wire.d.ts from protocol/v1/neurogarden.schema.json
+npm run build     # writes the bundle into src/neurogarden/server/static/ (committed)
 ```
