@@ -14,40 +14,61 @@ const KEY_TO_ACTION: Record<string, string> = {
   r: "rest",
 };
 
+/**
+ * Shift and CapsLock change the character a key reports: `keydown` may say "W" where
+ * `keyup` says "w". Fold every single-character key to lower case so a key can never
+ * stick down, and so WASD keeps working with CapsLock on. Named keys ("ArrowUp") pass
+ * through untouched.
+ */
+function normalise(key: string): string {
+  return key.length === 1 ? key.toLowerCase() : key;
+}
+
 export class Keys {
-  private held: string[] = [];
-  private tapped: string | null = null;
+  /** Key -> the press that put it down, so a later tap can beat an older hold. */
+  private readonly held = new Map<string, number>();
+  private tapped: { key: string; press: number } | null = null;
+  private presses = 0;
 
   down(key: string): void {
-    if (!(key in KEY_TO_ACTION)) return;
-    this.held = this.held.filter((k) => k !== key);
-    this.held.push(key);
-    this.tapped = key;
+    key = normalise(key);
+    if (!(key in KEY_TO_ACTION) || this.held.has(key)) return; // auto-repeat is not a new press
+    this.presses += 1;
+    this.held.set(key, this.presses);
+    this.tapped = { key, press: this.presses };
   }
 
   up(key: string): void {
-    this.held = this.held.filter((k) => k !== key);
+    this.held.delete(normalise(key));
   }
 
   clear(): void {
-    this.held = [];
+    this.held.clear();
     this.tapped = null;
   }
 
   /**
-   * The action for the next tick: the most recently pressed key still held, else a key tapped
-   * since the last tick (ticks are 200 ms apart; a quick tap must not vanish), else idle.
-   * Taps are consumed; held keys repeat.
+   * The action for the next tick: the key pressed most recently, whether it is still held
+   * (a hold repeats) or was tapped and released since the last tick (ticks are 200 ms apart;
+   * a quick tap must not vanish). Taps are consumed; held keys stay.
    */
   nextAction(): string {
-    const held = this.held[this.held.length - 1];
-    const key = held ?? this.tapped;
+    const tap = this.tapped;
     this.tapped = null;
-    return key === undefined || key === null ? "idle" : (KEY_TO_ACTION[key] ?? "idle");
+    let key: string | null = null;
+    let press = 0;
+    for (const [candidate, at] of this.held) {
+      if (at >= press) {
+        press = at;
+        key = candidate;
+      }
+    }
+    if (tap !== null && tap.press > press) key = tap.key;
+    return key === null ? "idle" : (KEY_TO_ACTION[key] ?? "idle");
   }
 
   isGameKey(key: string): boolean {
-    return key in KEY_TO_ACTION;
+    return normalise(key) in KEY_TO_ACTION;
   }
 }
 

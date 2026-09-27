@@ -1,5 +1,6 @@
 // Every sprite is 16 rows of 16 palette characters (bubbles are 8x8). Authored by hand.
 import { isPaletteChar } from "./palette";
+import { RESOURCE, TERRAIN } from "./types";
 
 export const TILE = 16;
 export const BUBBLE = 8;
@@ -297,12 +298,13 @@ const BUBBLE_DYING: Sprite = [
 ];
 
 export const TERRAIN_SPRITES: Record<number, Sprite> = {
-  0: ROCK, // VOID never appears in a spectator's world; rock keeps the map opaque if it did
-  1: GROUND,
-  2: ROCK,
-  3: WATER_A,
-  4: TREE,
-  5: NEST,
+  // VOID never appears in a spectator's world; rock keeps the map opaque if it ever did
+  [TERRAIN.void]: ROCK,
+  [TERRAIN.ground]: GROUND,
+  [TERRAIN.rock]: ROCK,
+  [TERRAIN.water]: WATER_A,
+  [TERRAIN.tree]: TREE,
+  [TERRAIN.nest]: NEST,
 };
 export const GROUND_FLOWERS = FLOWERS;
 export const WATER_FRAMES: readonly Sprite[] = [WATER_A, WATER_B];
@@ -321,6 +323,18 @@ export function fruitSprite(bitesLeft: number): Sprite {
   if (bitesLeft <= 1) return FRUIT_BITE;
   if (bitesLeft <= 2) return FRUIT_HALF;
   return FRUIT_FULL;
+}
+
+/** A sprite per catalog resource kind, chosen by how much of it is left. `none` has none. */
+export const RESOURCE_SPRITES: Record<number, (amount: number) => Sprite> = {
+  [RESOURCE.fruit]: fruitSprite,
+};
+
+/** The sprite for a terrain id at (x, y), in one of the two animation phases. */
+export function terrainSprite(terrain: number, x: number, y: number, phase: number): Sprite {
+  if (terrain === TERRAIN.ground) return groundVariant(x, y);
+  if (terrain === TERRAIN.water) return WATER_FRAMES[phase % WATER_FRAMES.length]!;
+  return TERRAIN_SPRITES[terrain] ?? TERRAIN_SPRITES[TERRAIN.rock]!;
 }
 
 /** Ground tiles get flowers on a fixed, scattered subset so the meadow is not a flat green. */

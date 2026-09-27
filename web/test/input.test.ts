@@ -44,6 +44,46 @@ describe("keys", () => {
     expect(keys.isGameKey("Escape")).toBe(false);
   });
 
+  it("fold Shift and CapsLock away so a key never sticks down", () => {
+    const keys = new Keys();
+    expect(keys.isGameKey("W")).toBe(true);
+    keys.down("w");
+    expect(keys.nextAction()).toBe("move_n");
+    keys.up("W"); // Shift went down mid-press: the browser reports the upper case
+    expect(keys.nextAction()).toBe("idle");
+    keys.down("R"); // CapsLock on: R still rests
+    expect(keys.nextAction()).toBe("rest");
+  });
+
+  it("let a tap beat a key held since before it, for one tick only", () => {
+    const keys = new Keys();
+    keys.down("ArrowUp"); // held down the whole time
+    expect(keys.nextAction()).toBe("move_n");
+    keys.down(" ");
+    keys.up(" ");
+    expect(keys.nextAction()).toBe("consume"); // the tap is newer than the hold
+    expect(keys.nextAction()).toBe("move_n"); // and the hold takes over again
+  });
+
+  it("let a key held since after a tap win over it", () => {
+    const keys = new Keys();
+    keys.down(" ");
+    keys.up(" ");
+    keys.down("ArrowUp"); // pressed after the tap
+    expect(keys.nextAction()).toBe("move_n");
+    expect(keys.nextAction()).toBe("move_n");
+  });
+
+  it("treat key auto-repeat as one press, so it cannot swallow a tap", () => {
+    const keys = new Keys();
+    keys.down("ArrowUp");
+    keys.down(" ");
+    keys.up(" ");
+    for (let i = 0; i < 5; i++) keys.down("ArrowUp"); // the OS repeating the held key
+    expect(keys.nextAction()).toBe("consume");
+    expect(keys.nextAction()).toBe("move_n");
+  });
+
   it("resolve names through the catalog's action order, unknown names to idle", () => {
     expect(actionId(ACTIONS, "move_w")).toBe(4);
     expect(actionId(ACTIONS, "consume")).toBe(5);

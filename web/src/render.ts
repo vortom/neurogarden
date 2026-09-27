@@ -4,16 +4,22 @@ import {
   BUBBLE,
   FLY_FRAMES,
   MOOD_BUBBLES,
-  TERRAIN_SPRITES,
+  RESOURCE_SPRITES,
   TILE,
-  WATER_FRAMES,
-  fruitSprite,
-  groundVariant,
+  terrainSprite,
   type Sprite,
 } from "./sprites";
-import { type Draw, type Garden, drawList, nightAlpha } from "./state";
+import { type Draw, type Garden, actorList, constants, nightAlpha, terrainList } from "./state";
+import type { WorldMap } from "./types";
 
 const ANIMATION_MS = 250;
+const PHASES = 2; // water ripples and wings beat on this two-frame clock
+const MAX_SCALE = 3;
+
+/** Integer pixel scale: as many whole screen pixels per world pixel as `room` allows. */
+export function scaleFor(worldWidth: number, room: number): number {
+  return Math.max(1, Math.min(MAX_SCALE, Math.floor(room / (worldWidth * TILE))));
+}
 
 function rasterise(sprite: Sprite, size: number): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
@@ -33,48 +39,96 @@ function rasterise(sprite: Sprite, size: number): HTMLCanvasElement {
 
 export class Renderer {
   private readonly ctx: CanvasRenderingContext2D;
-  private readonly cache = new Map<Sprite, HTMLCanvasElement>();
+  /** Rasterised sprites, by sprite and by the size they were rasterised at. */
+  private readonly cache = new Map<Sprite, Map<number, HTMLCanvasElement>>();
   private width = 0;
   private height = 0;
+  private scale: number;
+  /** The terrain, baked once per world: one layer per animation phase. */
+  private layers: HTMLCanvasElement[] = [];
+  private baked: WorldMap | null = null;
+  private lastPhase = -1;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  constructor(
+    private readonly canvas: HTMLCanvasElement,
+    scale = 2,
+  ) {
+    this.scale = scale;
     this.ctx = canvas.getContext("2d")!;
     this.ctx.imageSmoothingEnabled = false;
   }
 
+  setScale(scale: number): void {
+    this.scale = scale;
+  }
+
   private image(sprite: Sprite, size: number): HTMLCanvasElement {
-    let image = this.cache.get(sprite);
+    let bySize = this.cache.get(sprite);
+    if (bySize === undefined) {
+      bySize = new Map();
+      this.cache.set(sprite, bySize);
+    }
+    let image = bySize.get(size);
     if (image === undefined) {
       image = rasterise(sprite, size);
-      this.cache.set(sprite, image);
+      bySize.set(size, image);
     }
     return image;
   }
 
   /** Size the canvas for the world; the CSS scale keeps pixels crisp. */
-  fit(width: number, height: number, scale: number): void {
+  fit(width: number, height: number): void {
     this.width = width;
     this.height = height;
     this.canvas.width = width * TILE;
     this.canvas.height = height * TILE;
-    this.canvas.style.width = `${width * TILE * scale}px`;
-    this.canvas.style.height = `${height * TILE * scale}px`;
+    this.canvas.style.width = `${width * TILE * this.scale}px`;
+    this.canvas.style.height = `${height * TILE * this.scale}px`;
     this.ctx.imageSmoothingEnabled = false;
+    this.lastPhase = -1; // resizing clears the canvas: the next draw is not optional
   }
 
-  draw(garden: Garden, now: number): void {
+  /** The terrain only changes when a new map arrives, so draw it once per world, not per frame. */
+  private bake(world: WorldMap): void {
+    this.layers = [];
+    for (let phase = 0; phase < PHASES; phase++) {
+      const layer = document.createElement("canvas");
+      layer.width = world.width * TILE;
+      layer.height = world.height * TILE;
+      const ctx = layer.getContext("2d")!;
+      ctx.imageSmoothingEnabled = false;
+      for (const item of terrainList(world)) {
+        if (item.kind !== "tile") continue;
+        const sprite = terrainSprite(item.terrain, item.x, item.y, phase);
+        ctx.drawImage(this.image(sprite, TILE), item.x * TILE, item.y * TILE);
+      }
+      this.layers.push(layer);
+    }
+    this.baked = world;
+  }
+
+  /**
+   * Draw the garden. Nothing moves between ticks except the water and the wings, so a frame
+   * with neither a new message (`dirty`) nor a new animation phase is skipped entirely.
+   */
+  draw(garden: Garden, now: number, dirty = true): void {
     const ctx = this.ctx;
-    if (garden.world === null) {
+    const phase = Math.floor(now / ANIMATION_MS) % PHASES;
+    const world = garden.world;
+    if (world === null) {
+      if (!dirty && phase === this.lastPhase) return;
+      this.lastPhase = phase;
       ctx.fillStyle = "#1b1b1b";
       ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
       return;
     }
-    if (garden.world.width !== this.width || garden.world.height !== this.height) {
-      this.fit(garden.world.width, garden.world.height, Number(this.canvas.dataset.scale ?? 2));
-    }
-    const phase = Math.floor(now / ANIMATION_MS) % 2;
-    for (const item of drawList(garden)) this.drawOne(item, phase);
-    const alpha = nightAlpha(garden.frame?.light ?? 1000);
+    if (world.width !== this.width || world.height !== this.height) this.fit(world.width, world.height);
+    if (world !== this.baked) this.bake(world);
+    else if (!dirty && phase === this.lastPhase) return;
+    this.lastPhase = phase;
+    ctx.drawImage(this.layers[phase]!, 0, 0);
+    for (const item of actorList(garden)) this.drawOne(item, phase);
+    const alpha = nightAlpha(garden.frame?.light ?? 1000, constants(garden).lightMax);
     if (alpha > 0) {
       ctx.fillStyle = `rgba(20, 30, 90, ${alpha})`;
       ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
@@ -86,16 +140,14 @@ export class Renderer {
     const px = item.x * TILE;
     const py = item.y * TILE;
     switch (item.kind) {
-      case "tile": {
-        let sprite = TERRAIN_SPRITES[item.terrain] ?? TERRAIN_SPRITES[2]!;
-        if (item.terrain === 1) sprite = groundVariant(item.x, item.y);
-        if (item.terrain === 3) sprite = WATER_FRAMES[phase]!;
+      case "tile": // baked into the terrain layer
+        return;
+      case "resource": {
+        const sprite = RESOURCE_SPRITES[item.resource]?.(item.amount);
+        if (sprite === undefined) return;
         ctx.drawImage(this.image(sprite, TILE), px, py);
         return;
       }
-      case "fruit":
-        ctx.drawImage(this.image(fruitSprite(item.bites), TILE), px, py);
-        return;
       case "fly": {
         const sprite = FLY_FRAMES[item.away ? 0 : phase]!;
         ctx.save();
@@ -114,7 +166,8 @@ export class Renderer {
       case "bubble": {
         const sprite = MOOD_BUBBLES[item.mood];
         if (sprite === undefined) return;
-        ctx.drawImage(this.image(sprite, BUBBLE), px + TILE - BUBBLE + 2, py - BUBBLE + 4);
+        // A fly on the top row has no sky above it: keep its bubble on the canvas.
+        ctx.drawImage(this.image(sprite, BUBBLE), px + TILE - BUBBLE + 2, Math.max(0, py - BUBBLE + 4));
         return;
       }
       case "say": {

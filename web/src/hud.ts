@@ -1,5 +1,14 @@
 // The DOM around the canvas: status, roster, log, scores, and the play panel.
-import { type Garden, livingFlies, myFly } from "./state";
+import {
+  DEFAULT_CONSTANTS,
+  DEFAULT_PHASES,
+  type DayPhases,
+  type Garden,
+  constants,
+  dayPhases,
+  livingFlies,
+  myFly,
+} from "./state";
 
 const MOOD_GLYPH: Record<string, string> = {
   content: "✨",
@@ -26,22 +35,27 @@ const NEED_LABEL: Record<(typeof NEEDS)[number], string> = {
   health: "♥",
 };
 
-function bar(need: (typeof NEEDS)[number], value: number): HTMLElement {
+function bar(
+  need: (typeof NEEDS)[number],
+  value: number,
+  needMax = DEFAULT_CONSTANTS.needMax,
+): HTMLElement {
   const wrap = el("div", "bar");
   wrap.appendChild(el("span", "bar-label", NEED_LABEL[need]));
   const track = el("div", "bar-track");
   const fill = el("div", `bar-fill bar-${need}`);
-  fill.style.width = `${Math.max(0, Math.min(100, value / 10))}%`;
+  fill.style.width = `${Math.max(0, Math.min(100, (value / Math.max(1, needMax)) * 100))}%`;
   track.appendChild(fill);
   wrap.appendChild(track);
   return wrap;
 }
 
-export function timeOfDay(tick: number, dayLength: number): string {
-  const phase = tick % dayLength;
-  if (phase < dayLength / 12) return "dawn";
-  if (phase < (dayLength * 7) / 12) return "day";
-  if (phase < (dayLength * 8) / 12) return "dusk";
+/** Which quarter of the day a tick falls in, by the turning points the server announced. */
+export function timeOfDay(tick: number, phases: DayPhases = DEFAULT_PHASES): string {
+  const since = ((tick % phases.dayLength) + phases.dayLength) % phases.dayLength;
+  if (since < phases.dawnEnd) return "dawn";
+  if (since < phases.duskStart) return "day";
+  if (since < phases.nightStart) return "dusk";
   return "night";
 }
 
@@ -64,12 +78,13 @@ export class Hud {
 
   update(garden: Garden): void {
     const frame = garden.frame;
-    const dayLength = garden.welcome?.world.day_length ?? 1200;
+    const phases = dayPhases(garden);
+    const { needMax, nightLight } = constants(garden);
     if (frame === null) {
       this.status.textContent = garden.world ? "waiting for the first tick…" : "connecting…";
     } else {
-      const sky = frame.light < 500 ? "🌙" : "☀️";
-      this.status.textContent = `Day ${frame.day} · ${timeOfDay(frame.tick, dayLength)} ${sky} · tick ${frame.tick}`;
+      const sky = frame.light < nightLight ? "🌙" : "☀️";
+      this.status.textContent = `Day ${frame.day} · ${timeOfDay(frame.tick, phases)} ${sky} · tick ${frame.tick}`;
     }
 
     this.roster.replaceChildren();
@@ -83,7 +98,7 @@ export class Hud {
         head.appendChild(el("span", "fly-mood", ` ${MOOD_GLYPH[a.mood] ?? "?"}${a.connected ? "" : " (away)"}`));
         row.appendChild(head);
         const bars = el("div", "bars");
-        for (const need of NEEDS) bars.appendChild(bar(need, a[need]));
+        for (const need of NEEDS) bars.appendChild(bar(need, a[need], needMax));
         row.appendChild(bars);
         if (a.say) row.appendChild(el("div", "fly-say", `“${a.say}”`));
         this.roster.appendChild(row);
@@ -115,6 +130,7 @@ export class Hud {
       card.appendChild(el("p", undefined, `of ${d.causes.join(", ") || "unknown causes"} after ${d.stats.lifespan} ticks (${d.stats.days} days)`));
       card.appendChild(el("p", "muted", `${d.stats.bites} bites · ${d.stats.drinks} drinks · ${d.stats.tiles_explored} tiles explored`));
       this.mine.appendChild(card);
+      if (me.hatching) this.mine.appendChild(el("p", "muted", "hatching…"));
       return;
     }
     const fly = myFly(garden);
@@ -122,13 +138,13 @@ export class Hud {
       const card = el("div", "me-card");
       card.appendChild(el("h3", undefined, `${fly.name} · #${fly.lineage} · ${MOOD_GLYPH[fly.mood] ?? ""}`));
       const bars = el("div", "bars");
-      for (const need of NEEDS) bars.appendChild(bar(need, fly[need]));
+      for (const need of NEEDS) bars.appendChild(bar(need, fly[need], needMax));
       card.appendChild(bars);
       const obs = me.observation;
       if (obs !== null) card.appendChild(el("p", "muted", `tick ${obs.tick} · missed ${obs.missed} · deadline ${obs.deadline_ms} ms`));
       card.appendChild(el("p", "muted", "arrows move · space eats or drinks · R rests"));
       this.mine.appendChild(card);
-    } else if (me.joined !== null) {
+    } else if (me.hatching || me.joined !== null) {
       this.mine.appendChild(el("p", "muted", "hatching…"));
     }
   }

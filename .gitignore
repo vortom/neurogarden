@@ -5,3 +5,5 @@ __pycache__/
 .ruff_cache/
 dist/
 web/node_modules/
+web/.vite/
+web/coverage/

@@ -18,3 +18,10 @@ export type Chronicle = P.Chronicle;
 export type ErrorPayload = P.Error;
 
 export const PROTOCOL_VERSION = 1;
+
+/**
+ * The catalog's own numbering, mirrored here because tiles and resources arrive as bare
+ * ints: `welcome.catalog.bodies.fly.channels.vision.tables.terrain` and `.resource`.
+ */
+export const TERRAIN = { void: 0, ground: 1, rock: 2, water: 3, tree: 4, nest: 5 } as const;
+export const RESOURCE = { none: 0, fruit: 1 } as const;

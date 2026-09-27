@@ -3,15 +3,20 @@ import {
   BUBBLE,
   FLY_FRAMES,
   MOOD_BUBBLES,
+  RESOURCE_SPRITES,
   TERRAIN_SPRITES,
   TILE,
+  WATER_FRAMES,
   allSprites,
   fruitSprite,
   groundVariant,
+  terrainSprite,
   validateSprite,
 } from "../src/sprites";
+import { RESOURCE, TERRAIN } from "../src/types";
 
 const CATALOG_TERRAIN = { void: 0, ground: 1, rock: 2, water: 3, tree: 4, nest: 5 };
+const CATALOG_RESOURCES = { none: 0, fruit: 1 };
 const CATALOG_MOODS = ["content", "hungry", "thirsty", "sleepy", "desperate", "dying"];
 
 describe("sprites", () => {
@@ -23,7 +28,29 @@ describe("sprites", () => {
   });
 
   it("cover every terrain the catalog can send", () => {
+    expect(TERRAIN).toEqual(CATALOG_TERRAIN);
     for (const id of Object.values(CATALOG_TERRAIN)) expect(TERRAIN_SPRITES[id]).toBeDefined();
+  });
+
+  it("cover every resource kind the catalog can send but `none`", () => {
+    expect(RESOURCE).toEqual(CATALOG_RESOURCES);
+    for (const [name, id] of Object.entries(CATALOG_RESOURCES)) {
+      if (name === "none") {
+        expect(RESOURCE_SPRITES[id], name).toBeUndefined();
+        continue;
+      }
+      const pick = RESOURCE_SPRITES[id];
+      expect(pick, name).toBeDefined();
+      expect(validateSprite(pick!(3), TILE), name).toBeNull();
+    }
+  });
+
+  it("animate water and scatter ground, and fall back to rock for an unknown tile", () => {
+    expect(terrainSprite(TERRAIN.water, 0, 0, 0)).toBe(WATER_FRAMES[0]);
+    expect(terrainSprite(TERRAIN.water, 0, 0, 1)).toBe(WATER_FRAMES[1]);
+    expect(terrainSprite(TERRAIN.ground, 0, 0, 0)).toBe(groundVariant(0, 0));
+    expect(terrainSprite(TERRAIN.tree, 0, 0, 0)).toBe(TERRAIN_SPRITES[TERRAIN.tree]);
+    expect(terrainSprite(99, 0, 0, 0)).toBe(TERRAIN_SPRITES[TERRAIN.rock]);
   });
 
   it("have a bubble for every mood that gets one, at bubble size", () => {
