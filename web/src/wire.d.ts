@@ -45,9 +45,12 @@ export type Motd = string;
 export type Owner1 = string;
 export type Protocol1 = number;
 export type Role1 = "agent" | "spectator";
+export type DawnEnd = number;
 export type DayLength = number;
+export type DuskStart = number;
 export type Height = number;
 export type Name = string;
+export type NightStart = number;
 export type RulesVersion = number;
 export type Tps = number;
 export type Width = number;
@@ -239,9 +242,12 @@ export interface Events {
   [k: string]: string[];
 }
 export interface WorldInfo {
+  dawn_end: DawnEnd;
   day_length: DayLength;
+  dusk_start: DuskStart;
   height: Height;
   name: Name;
+  night_start: NightStart;
   rules_version: RulesVersion;
   tps: Tps;
   width: Width;

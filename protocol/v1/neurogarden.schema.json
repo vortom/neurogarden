@@ -1151,8 +1151,16 @@
     },
     "WorldInfo": {
       "properties": {
+        "dawn_end": {
+          "title": "Dawn End",
+          "type": "integer"
+        },
         "day_length": {
           "title": "Day Length",
+          "type": "integer"
+        },
+        "dusk_start": {
+          "title": "Dusk Start",
           "type": "integer"
         },
         "height": {
@@ -1162,6 +1170,10 @@
         "name": {
           "title": "Name",
           "type": "string"
+        },
+        "night_start": {
+          "title": "Night Start",
+          "type": "integer"
         },
         "rules_version": {
           "title": "Rules Version",
@@ -1182,6 +1194,9 @@
         "height",
         "tps",
         "day_length",
+        "dawn_end",
+        "dusk_start",
+        "night_start",
         "rules_version"
       ],
       "title": "WorldInfo",
