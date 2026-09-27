@@ -9,8 +9,6 @@ import type { WorldMap } from "./types";
 
 const OWNER_KEY = "neurogarden.owner";
 const OWNER_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
-const CONTROL_CHARS = /[\x00-\x1f\x7f]/g; // the server closes a connection that sends these
-const SAY_MAX = 40;
 const SIDEBAR = 360; // the aside in index.html; whatever is left over is the garden's
 
 /** Storage is blocked in some windows and profiles; the page must run without it. */
@@ -134,8 +132,7 @@ nameInput.addEventListener("keydown", (event) => {
 sayInput.addEventListener("keydown", (event) => {
   event.stopPropagation();
   if (event.key !== "Enter") return;
-  const text = sayInput.value.replace(CONTROL_CHARS, "").trim().slice(0, SAY_MAX);
-  agent?.send(say(text));
+  agent?.send(say(sayInput.value)); // `say` strips what the server would refuse
   sayInput.value = "";
 });
 window.addEventListener("keydown", (event) => {

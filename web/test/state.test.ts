@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decode, encode, hello } from "../src/protocol";
+import { SAY_MAX, decode, encode, hello, say, sayText } from "../src/protocol";
 import {
   DEFAULT_CONSTANTS,
   DEFAULT_PHASES,
@@ -250,5 +250,13 @@ describe("envelopes", () => {
     expect(decode('{"v": 2, "type": "frame", "payload": {}}')).toBeNull();
     expect(decode("nope")).toBeNull();
     expect(decode("[]")).toBeNull();
+  });
+
+  it("strip from a say what the server would close the connection over", () => {
+    expect(sayText("  fruit? 🍎  ")).toBe("fruit? 🍎");
+    expect(sayText("\x1b[2Jcleared\x07")).toBe("[2Jcleared"); // the escape itself is gone
+    expect(sayText("two\nlines")).toBe("twolines");
+    expect(sayText("x".repeat(60))).toHaveLength(SAY_MAX);
+    expect(say("hi\x00")).toMatchObject({ type: "say", payload: { text: "hi" } });
   });
 });

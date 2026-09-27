@@ -32,8 +32,19 @@ export function action(tick: number, id: number): ClientMessage {
   return { v: 1, type: "action", payload: { tick, action: id } };
 }
 
+export const SAY_MAX = 40;
+const CONTROL_CHARS = /[\x00-\x1f\x7f]/g;
+
+/**
+ * What the server will accept in a speech bubble: it reads a control character as a
+ * malformed frame and closes the connection, and rejects anything over 40 characters.
+ */
+export function sayText(text: string): string {
+  return text.replace(CONTROL_CHARS, "").trim().slice(0, SAY_MAX);
+}
+
 export function say(text: string): ClientMessage {
-  return { v: 1, type: "say", payload: { text } };
+  return { v: 1, type: "say", payload: { text: sayText(text) } };
 }
 
 export function leave(): ClientMessage {
