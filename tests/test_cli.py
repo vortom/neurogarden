@@ -5,7 +5,7 @@ import pytest
 
 from neurogarden import cli
 from neurogarden.protocol import schema_text
-from neurogarden.server import Server, ServerConfig, parse_npc, serve
+from neurogarden.server import Server, ServerConfig, app, parse_npc, serve
 
 
 def test_schema_command_prints_the_artifact(capsys):
@@ -111,6 +111,31 @@ def test_serve_announces_the_port_it_really_bound(capsys):
     out = capsys.readouterr().out
     assert port != 0 and f"on ws://127.0.0.1:{port}" in out
     assert f"--url ws://127.0.0.1:{port}" in out
+    assert "play:  open http://127.0.0.1:" in out  # the committed bundle is there to play
+
+
+def test_the_banner_offers_no_page_when_no_bundle_was_built(capsys, monkeypatch):
+    monkeypatch.setattr(cli, "bundle_present", lambda: False)
+
+    class FakeServer:
+        config = ServerConfig(map="drosoville", seed=0, port=8765, web=True)
+        port = 8765
+        url = "ws://127.0.0.1:8765"
+
+    cli.banner(FakeServer())
+    out = capsys.readouterr().out
+    assert "watch:" in out and "play:" not in out
+
+
+def test_the_server_warns_when_it_is_told_to_serve_a_page_it_does_not_have(caplog, monkeypatch):
+    monkeypatch.setattr(app, "bundle_present", lambda: False)
+
+    async def scenario():
+        async with Server(ServerConfig(port=0, tps=50.0, npcs=[])):
+            pass
+
+    asyncio.run(scenario())
+    assert "npm --prefix web run build" in caplog.text
 
 
 def test_join_reports_each_life(capsys):
@@ -146,3 +171,14 @@ def test_join_reports_each_life(capsys):
 
 def test_join_without_a_server_fails_cleanly(capsys):
     assert cli.main(["join", "--owner", "x", "--url", "ws://127.0.0.1:1", "--lives", "1"]) == 1
+
+
+def test_serve_refuses_a_port_that_is_already_taken(capsys):
+    import socket
+
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        port = taken.getsockname()[1]
+        assert cli.main(["serve", "--port", str(port), "--npc", "none"]) == 1
+    assert "address already in use" in capsys.readouterr().err

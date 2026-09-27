@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
-from http import HTTPStatus
 
 from websockets.exceptions import ConnectionClosed
 
@@ -33,13 +32,6 @@ _CLOSE_CODES = {
     "unauthorized": CLOSE_UNAUTHORIZED,
     "hello_required": CLOSE_HELLO_REQUIRED,
 }
-
-
-def health_check(connection, request):
-    """Plain HTTP on the WebSocket port, so a load balancer can ask if we are alive."""
-    if request.path == "/healthz":
-        return connection.respond(HTTPStatus.OK, "OK\n")
-    return None
 
 
 class Gateway:

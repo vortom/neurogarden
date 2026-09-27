@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NeuroGarden</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext x='1' y='13' font-size='13'%3E%F0%9F%AA%B0%3C/text%3E%3C/svg%3E" />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #14161c;
+        --panel: #1e2129;
+        --line: #2c3040;
+        --text: #e8e6df;
+        --muted: #8f94a3;
+        --accent: #ffe066;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        display: grid;
+        grid-template-columns: auto 340px;
+        min-height: 100vh;
+      }
+      main { padding: 16px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+      h1 { margin: 0; font-size: 18px; letter-spacing: 0.08em; }
+      h1 small { color: var(--muted); font-weight: normal; letter-spacing: 0; margin-left: 8px; }
+      #garden { image-rendering: pixelated; image-rendering: crisp-edges; border: 2px solid var(--line); background: #1b1b1b; }
+      #status { color: var(--muted); }
+      aside { background: var(--panel); border-left: 1px solid var(--line); padding: 16px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }
+      h2 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+      .fly-row { padding: 6px 0; border-bottom: 1px solid var(--line); }
+      .fly-row.mine .fly-name { color: var(--accent); }
+      .fly-row.away { opacity: 0.6; }
+      .fly-name { font-weight: bold; }
+      .fly-owner { color: var(--muted); }
+      .fly-say { color: var(--accent); font-style: italic; }
+      .bars { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 4px; }
+      .bar { display: flex; align-items: center; gap: 4px; font-size: 11px; }
+      .bar-track { flex: 1; height: 6px; background: #0f1116; border-radius: 3px; overflow: hidden; }
+      .bar-fill { height: 100%; }
+      .bar-satiety { background: #d9333a; }
+      .bar-hydration { background: #3b7bd4; }
+      .bar-energy { background: #ffe066; }
+      .bar-health { background: #4faa4f; }
+      .log-line { color: var(--muted); font-size: 12px; }
+      .score-row { display: flex; justify-content: space-between; font-size: 12px; }
+      .score-best { color: var(--muted); }
+      #play-panel { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+      input, button { font: inherit; background: #0f1116; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; }
+      button { cursor: pointer; }
+      button:hover { border-color: var(--accent); }
+      #notice { color: #ffb347; }
+      .muted { color: var(--muted); }
+      .obituary, .me-card { border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+      .obituary h3, .me-card h3 { margin: 0 0 4px; font-size: 14px; }
+      .obituary p, .me-card p { margin: 2px 0; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>NEUROGARDEN <small>Small worlds. Strange minds.</small></h1>
+      <div id="status">connecting…</div>
+      <canvas id="garden" width="512" height="384"></canvas>
+      <div id="notice" hidden></div>
+    </main>
+    <aside>
+      <section>
+        <h2>Play</h2>
+        <div id="play-panel">
+          <input id="owner" placeholder="your name" maxlength="64" />
+          <button id="play">Hatch a fly</button>
+          <button id="leave" hidden>Leave</button>
+          <input id="say" placeholder="say something…" maxlength="40" hidden />
+          <button id="hatch" hidden>Hatch again</button>
+        </div>
+        <div id="mine"></div>
+      </section>
+      <section><h2>Flies</h2><div id="roster"></div></section>
+      <section><h2>Naturalist's log</h2><div id="log"></div></section>
+      <section><h2>Hall of flies</h2><div id="scores"></div></section>
+    </aside>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

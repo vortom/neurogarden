@@ -29,7 +29,7 @@ packages = ["src/neurogarden"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["slow: balance guard and benchmark (tens of seconds)"]
+markers = ["slow: balance guard, benchmark and the web bundle rebuild (tens of seconds)"]
 
 [tool.ruff]
 line-length = 100

@@ -96,7 +96,12 @@ class WorldInfo(OpenModel):
     width: int
     height: int
     tps: float
+    # The shape of a day, in ticks since it began: dawn ramp [0, dawn_end), day,
+    # dusk ramp [dusk_start, night_start), night. A client names the time of day from these.
     day_length: int
+    dawn_end: int
+    dusk_start: int
+    night_start: int
     rules_version: int
 
 

@@ -64,6 +64,9 @@ def welcome_message(
         height=world.state.height,
         tps=tps,
         day_length=world.config.day_length,
+        dawn_end=world.config.dawn_end,
+        dusk_start=world.config.dusk_start,
+        night_start=world.config.night_start,
         rules_version=RULES_VERSION,
     )
     payload = Welcome(

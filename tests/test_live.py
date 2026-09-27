@@ -12,8 +12,10 @@ from websockets.asyncio.client import connect
 
 from neurogarden.brains import RandomBrain, ScriptedBrain
 from neurogarden.engine import Config, World, maps
+from neurogarden.protocol import build_catalog
 from neurogarden.sdk import AsyncClient, ConnectionLost, ServerError, Session, run_brain
 from neurogarden.server import Server, ServerConfig
+from neurogarden.server import frames as server_frames
 
 FAST = dict(port=0, tps=50.0, npcs=[], hello_timeout=0.5)
 JOIN_FRAME = '{"v": 1, "type": "join", "payload": {}}'
@@ -26,6 +28,17 @@ def run(coro):
 def hello_frame(owner, role="agent", token="dev"):
     payload = {"protocol": 1, "token": token, "owner": owner, "role": role}
     return json.dumps({"v": 1, "type": "hello", "payload": payload})
+
+
+def test_the_welcome_describes_the_shape_of_a_day():
+    """A client names dawn, day, dusk and night from these, so the world has to say them."""
+    config = Config(day_length=400, dawn_end=40, dusk_start=300, night_start=340)
+    world = World.from_map(maps.load("drosoville"), config, seed=0)
+    message = server_frames.welcome_message(
+        "alice", "spectator", world, "drosoville", 5.0, build_catalog(), "hello"
+    )
+    day = message.payload.world
+    assert (day.day_length, day.dawn_end, day.dusk_start, day.night_start) == (400, 40, 300, 340)
 
 
 def test_two_brains_and_an_npc_share_the_world_and_the_spectator_sees_them_all():
