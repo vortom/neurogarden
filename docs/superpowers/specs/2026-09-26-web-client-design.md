@@ -35,6 +35,7 @@ web/                          Vite + TypeScript + vitest; no runtime framework
     render.ts                 canvas 2D: tiles, water animation, flies, bubbles, tint
     hud.ts                    DOM: roster, log, scoreboard, play panel, obituary
     input.ts                  keys -> action ids
+    play.ts                   the agent socket's lifecycle, as a pure state machine
     main.ts                   wiring
   test/*.test.ts
 src/neurogarden/server/static/   the built page (committed; `npm run build` refreshes it)
@@ -49,11 +50,32 @@ only files that exist.
 
 ## 3. Server: static files
 
-`Gateway.process_request` answers any request without `Upgrade: websocket`:
-`/` and `/index.html` → the page, `/assets/*` → the bundle, `/healthz` stays,
-anything else → 404. Paths are resolved inside the static directory (traversal
-rejected with 404), content types by extension, `Cache-Control: no-cache`.
-`neurogarden serve --no-web` disables it.
+`src/neurogarden/server/static_files.py` builds the `process_request` hook
+websockets calls for any request without `Upgrade: websocket`: `/` and
+`/index.html` → the page, `/assets/*` → the bundle, `/healthz` stays, anything
+else → 404, and any method but `GET` or `HEAD` → 405 with `Allow: GET, HEAD`.
+Paths are resolved inside the static directory (traversal rejected with 404),
+content types by lower-cased extension, file bytes read once and kept in memory
+(the tick loop shares this event loop, so no GET may touch the disk twice).
+`Cache-Control` is `no-cache` for the page and
+`public, max-age=31536000, immutable` for the content-hashed `/assets/*`.
+
+Every response carries `X-Content-Type-Options: nosniff` and
+`Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline';
+img-src 'self' data:; connect-src 'self' ws: wss:` — enough for the page's
+inline stylesheet, its `data:` URI favicon and a WebSocket back to its own
+origin, and nothing else.
+
+The handshake itself is guarded by an `Origin` allow list built from the host
+and port the world was configured on (`http://127.0.0.1:{port}`,
+`http://localhost:{port}` and `http://[::1]:{port}` for a loopback host; `http`
+and `https` on the host itself otherwise), so a page on another site cannot fly
+someone's fly. The list includes `None`, which is what a non-browser client
+sends: the SDK and `neurogarden watch` are unaffected. `--port 0` (the tests)
+has no knowable origin before the bind, so the check is skipped there.
+
+`neurogarden serve --no-web` disables the page. With `--web` but no built
+bundle the server warns at start-up and the banner drops its "play:" line.
 
 ## 4. Rendering
 
@@ -89,11 +111,17 @@ rejected with 404), content types by extension, `Cache-Control: no-cache`.
 
 - vitest: every terrain/resource/mood in the catalog has a sprite and every
   sprite is 16×16 with palette-only characters; `input` maps keys to the
-  catalog's action ids; the view model turns `world` + `frame` into a draw list
-  (tiles, fruit, flies, bubbles) and keeps the last 8 log lines; envelope
-  decoding ignores unknown types.
-- Python: static serving (index, asset, 404, traversal, `--no-web`); the
-  committed bundle is present and consistent.
+  catalog's action ids, folds Shift and CapsLock away, and lets a tap beat an
+  older hold for one tick; `PlaySession` ignores a superseded socket and sends
+  no action for the observation of the tick a fly died; the view model turns
+  `world` + `frame` into a draw list (tiles, resources, flies, bubbles), reads
+  its scales from `welcome`, and keeps the last 8 log lines; envelope decoding
+  ignores unknown types.
+- Python: static serving (index, hashed asset and its immutable caching, `HEAD`,
+  405, `/healthz?x=1`, 404, traversal, `--no-web`, the security headers); the
+  `Origin` allow list, and a foreign `Origin` refused with 403 on a fixed port;
+  the committed bundle is present, consistent, within the CSP, and (marked
+  `slow`) byte-identical to a fresh `npm run build`.
 - Manual: Chrome screenshot of the live page with two NPCs and one human.
 
 ## 7. Known limits

@@ -106,6 +106,13 @@ obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
   where the emoji tiles misalign.
 - The server refuses to bind a non-loopback host with the default token; pass
   `--token` to expose a world beyond your machine.
+- Browsers may only open a socket to a world from the page that world served:
+  the handshake checks `Origin` against the host and port `serve` was given, so
+  set `--host` to the address people will actually browse to. Clients that send
+  no `Origin` — the SDK, `neurogarden join`, `neurogarden watch` — are never
+  affected. The page reads a non-default token from `?token=…` and wipes it from
+  the address bar; that is a convenience for a world on your own machine, not a
+  way to hand out access.
 
 ## Development
 
@@ -118,8 +125,12 @@ uv run ruff check .
 The browser client lives in `web/` (Vite + TypeScript, no framework):
 
 ```bash
-cd web && npm install
-npm test          # vitest
-npm run types     # regenerate src/wire.d.ts from protocol/v1/neurogarden.schema.json
-npm run build     # writes the bundle into src/neurogarden/server/static/ (committed)
+npm --prefix web install
+npm --prefix web test     # vitest
+npm --prefix web run types  # regenerate src/wire.d.ts from protocol/v1/neurogarden.schema.json
+npm --prefix web run build  # writes the bundle into src/neurogarden/server/static/ (committed)
+npm --prefix web run check  # rebuild and fail if the committed bundle is out of date
 ```
+
+`uv run pytest -m slow` runs the same bundle check from the Python side, and
+skips it when npm is not installed.
