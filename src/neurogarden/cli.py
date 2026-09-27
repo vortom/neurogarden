@@ -96,7 +96,7 @@ def cmd_serve(args) -> int:
             web=not args.no_web,
         )
         asyncio.run(serve(config, on_ready=banner))
-    except ValueError as err:
+    except (ValueError, OSError) as err:  # bad flags, or the port is already taken
         return _refuse(err)
     except KeyboardInterrupt:
         pass

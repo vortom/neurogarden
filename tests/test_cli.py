@@ -171,3 +171,14 @@ def test_join_reports_each_life(capsys):
 
 def test_join_without_a_server_fails_cleanly(capsys):
     assert cli.main(["join", "--owner", "x", "--url", "ws://127.0.0.1:1", "--lives", "1"]) == 1
+
+
+def test_serve_refuses_a_port_that_is_already_taken(capsys):
+    import socket
+
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        port = taken.getsockname()[1]
+        assert cli.main(["serve", "--port", str(port), "--npc", "none"]) == 1
+    assert "address already in use" in capsys.readouterr().err
