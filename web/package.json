@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "check": "npm run build && git diff --exit-code -- ../src/neurogarden/server/static",
     "test": "vitest run",
     "types": "node scripts/gen-types.mjs"
   },

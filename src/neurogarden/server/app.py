@@ -16,11 +16,12 @@ from neurogarden.engine import Config, World, maps
 from .gateway import Gateway
 from .ports import LocalPort
 from .runner import WorldRunner
-from .static_files import make_process_request
+from .static_files import STATIC_DIR, bundle_present, make_process_request
 
 log = logging.getLogger("neurogarden.server")
 DEFAULT_TOKEN = "dev"
 DEFAULT_MOTD = "Small worlds. Strange minds. Be kind to the flies."
+DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 @dataclass
@@ -46,6 +47,30 @@ def _is_loopback(host: str) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def allowed_origins(host: str, port: int) -> list[str | None] | None:
+    """The `Origin` values a browser may connect from, or None to check nothing.
+
+    Only the page this server itself serves has any business opening a socket to it: a
+    page on another site must not be able to fly someone's fly (cross-site WebSocket
+    hijacking). Non-browsers — the SDK, `neurogarden watch` — send no `Origin` at all,
+    which is what the `None` in the list allows. websockets wants the list before the
+    bind, so an ephemeral port (`--port 0`, which only the tests use) cannot have one:
+    nothing is known yet about the address the page will be served from.
+    """
+    if port == 0:
+        return None
+    loopback = _is_loopback(host)
+    hosts = ("127.0.0.1", "localhost", "[::1]") if loopback else (host,)
+    schemes = ("http",) if loopback else ("http", "https")
+    origins: list[str | None] = []
+    for scheme in schemes:
+        for name in hosts:
+            origins.append(f"{scheme}://{name}:{port}")
+            if port == DEFAULT_PORTS[scheme]:
+                origins.append(f"{scheme}://{name}")  # a browser omits the scheme's own port
+    return [*origins, None]
 
 
 def parse_npc(spec: str) -> tuple[str, int]:
@@ -88,10 +113,16 @@ class Server:
 
     async def __aenter__(self) -> Server:
         self._hatch_npcs()
+        if self.config.web and not bundle_present():
+            log.warning(
+                "no browser client in %s: run `npm --prefix web run build` to serve the page",
+                STATIC_DIR,
+            )
         self._ws = await websockets_serve(
             self.gateway.handle,
             self.config.host,
             self.config.port,
+            origins=allowed_origins(self.config.host, self.config.port),
             process_request=make_process_request(self.config.web),
         )
         self.port = self._ws.sockets[0].getsockname()[1]
