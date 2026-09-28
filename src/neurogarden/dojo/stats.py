@@ -99,4 +99,14 @@ def fitness_wellbeing(stats: EpisodeStats) -> float:
     return float(stats.lifespan) * (1.0 + stats.mean_wellbeing)
 
 
-FITNESSES = {"lifespan": fitness_lifespan, "wellbeing": fitness_wellbeing}
+def fitness_forager(stats: EpisodeStats) -> float:
+    """Wellbeing plus a bounty per bite: the first meals are the hardest thing to find, and a
+    fly that drinks and rests but never eats is a wall evolution otherwise sits behind."""
+    return fitness_wellbeing(stats) + 100.0 * stats.bites
+
+
+FITNESSES = {
+    "lifespan": fitness_lifespan,
+    "wellbeing": fitness_wellbeing,
+    "forager": fitness_forager,
+}

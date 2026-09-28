@@ -2,9 +2,10 @@
 
 A plain evolution strategy (Salimans et al. 2017): perturb the weights in mirrored pairs,
 live one life per perturbation on the generation's seeds, rank the fitnesses, and step
-the weights towards the perturbations that lived better. The default fitness is the
-lifespan weighted by wellbeing (`dojo.stats.fitness_wellbeing`): a slope to climb before
-the first extra tick of life is won. The hall of flies still ranks by lifespan alone.
+the weights towards the perturbations that lived better. The default fitness is
+`dojo.stats.fitness_forager`: lifespan weighted by wellbeing, plus a bounty per bite — a
+slope to climb before the first extra tick of life is won, and a pull past the wall where
+a fly drinks and rests but never eats. The hall of flies still ranks by lifespan alone.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ class EvolveConfig:
     seed: int = 0
     workers: int | None = None  # processes for the evaluation; 0 or 1 = in this process
     map: str = "drosoville"
-    fitness: str = "wellbeing"  # see dojo.stats.FITNESSES; lifespan is what the garden ranks by
+    fitness: str = "forager"  # see dojo.stats.FITNESSES; lifespan is what the garden ranks by
     init_scale: float = 1.0  # spread of the starting weights, relative to 1/sqrt(fan-in)
     temperature: float = 0.5  # softmax temperature the brains act at, evolving and after
 

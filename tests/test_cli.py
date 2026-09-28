@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 
 import pytest
 
@@ -221,7 +222,7 @@ def test_lives_prints_the_hall_of_flies(garden, capsys):
     path, _ = garden
     assert cli.main(["lives", "--archive", path]) == 0
     out = capsys.readouterr().out
-    assert "drosoville (seed 3)" in out and "2 lives" in out
+    assert "drosoville (seed 3)" in out and re.search(r" [2-9] lives", out)  # the npc may rejoin
     assert "alice" in out and "npc-scripted-1" in out and "starvation / 0 / 0" in out
     assert cli.main(["lives", "--archive", path, "--owner", "alice"]) == 0
     rows = [line for line in capsys.readouterr().out.splitlines() if line.startswith("alice")]
@@ -338,3 +339,41 @@ def test_export_refuses_an_unwritable_output_path(garden, tmp_path, capsys):
     argv = ["export", "--archive", path, "--owner", "alice", "--life", "1", "--out", out]
     assert cli.main(argv) == 1
     assert capsys.readouterr().err.startswith("neurogarden: ")
+
+
+# --- the evolved brain -----------------------------------------------------------------------
+
+
+def test_evolve_writes_weights_that_join_can_fly(tmp_path, capsys):
+    out = str(tmp_path / "tiny.npz")
+    argv = [
+        "evolve", "--out", out, "--generations", "1", "--population", "2", "--episodes", "1",
+        "--max-steps", "20", "--hidden", "3", "--workers", "1", "--seed", "4",
+    ]  # fmt: skip
+    assert cli.main(argv) == 0
+    printed = capsys.readouterr().out
+    assert "evolving a 3-neuron brain" in printed and "gen   1/1" in printed and "wrote" in printed
+    assert cli.main([*argv, "--start", out, "--out", str(tmp_path / "again.npz")]) == 0
+    capsys.readouterr()
+
+    from neurogarden.engine import Config
+
+    config = ServerConfig(
+        port=0,
+        tps=50.0,
+        npcs=[],
+        hello_timeout=1.0,
+        config=Config(initial_satiety=3, initial_health=5),
+    )
+
+    async def scenario():
+        async with Server(config) as server:
+            join = ["join", "--brain", "evolved", "--weights", out, "--owner", "eve"]
+            return await asyncio.to_thread(cli.main, [*join, "--url", server.url, "--lives", "1"])
+
+    assert asyncio.run(scenario()) == 0
+    assert "eve's" in capsys.readouterr().out
+    assert cli.main(["join", "--brain", "random", "--weights", out, "--owner", "x"]) == 1
+    assert "for --brain evolved" in capsys.readouterr().err
+    assert cli.main(["evolve", "--out", out, "--population", "3", "--workers", "1"]) == 1
+    assert "even" in capsys.readouterr().err
