@@ -84,7 +84,7 @@ class Genome:
     def load(cls, source) -> tuple[Genome, dict]:
         """From a path, or anything with `open("rb")` (a packaged resource). ValueError for
         a file that is not a brain of this shape."""
-        name = getattr(source, "name", None) or str(source)
+        name = str(source) if isinstance(source, str | Path) else getattr(source, "name", source)
         try:
             if hasattr(source, "open") and not isinstance(source, Path):
                 with source.open("rb") as handle, np.load(handle) as data:

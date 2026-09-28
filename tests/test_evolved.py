@@ -153,7 +153,7 @@ def test_rank_normalisation_is_centred_and_silent_on_a_tie():
 def test_evolve_is_deterministic_and_lives_are_reproducible():
     first = evolve(SMALL)
     second = evolve(SMALL)
-    assert len(first.history) == 2
+    assert len(first.history) == 2 and first.history[0].seconds > 0
     assert np.array_equal(first.genome.to_vector(), second.genome.to_vector())
     assert first.meta["generations"] == 2 and first.meta["population"] == 4
     assert first.meta["parent"] is None and first.meta["total_generations"] == 2

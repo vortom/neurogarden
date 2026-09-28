@@ -490,7 +490,11 @@ def cmd_evolve(args) -> int:
             population=args.population,
             sigma=args.sigma,
             learning_rate=args.learning_rate,
-            hidden=args.hidden or inherited.get("hidden") or EvolveConfig.hidden,
+            hidden=(
+                args.hidden
+                if args.hidden is not None
+                else inherited.get("hidden", EvolveConfig.hidden)
+            ),
             episodes=args.episodes,
             max_steps=args.max_steps,
             seed=args.seed,
