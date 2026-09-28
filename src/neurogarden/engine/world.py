@@ -44,8 +44,8 @@ class World:
         return cls(state, parsed.text)
 
     @classmethod
-    def restore(cls, data: dict) -> World:
-        return cls(_snapshot.restore(data))
+    def restore(cls, data: dict, map_text: str | None = None) -> World:
+        return cls(_snapshot.restore(data), map_text)
 
     @property
     def state(self) -> WorldState:
@@ -87,6 +87,14 @@ class World:
         state.occupant[y, x] = agent.id
         state.next_agent_id += 1
         return agent.id
+
+    def despawn(self, agent_id: int) -> None:
+        """Take a dead agent out of the state. An input like `spawn`: whoever drives the
+        world records it, so a replay removes the same corpse at the same tick."""
+        agent = self._agent(agent_id)
+        if agent.alive:
+            raise ValueError(f"agent {agent_id} is alive; only the dead are despawned")
+        del self._state.agents[agent_id]
 
     def _default_spawn_tile(self) -> tuple[int, int]:
         """The nest, else the free walkable tile nearest the nest (BFS, N/E/S/W order)."""

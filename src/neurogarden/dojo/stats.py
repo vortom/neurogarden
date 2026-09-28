@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from neurogarden.engine.events import Event
 
@@ -57,6 +57,28 @@ class StatsTracker:
         self._updates += 1
         self._wellbeing_sum += 1.0 - drive(body) / MAX_DRIVE
         stats.mean_wellbeing = self._wellbeing_sum / self._updates
+
+    def to_dict(self) -> dict:
+        """Everything a tracker needs to carry on after a restart (JSON-serialisable)."""
+        return {
+            "agent_id": self._agent_id,
+            "day_length": self._day_length,
+            "stats": asdict(self.stats) | {"death_causes": list(self.stats.death_causes)},
+            "visited": sorted(self._visited),
+            "wellbeing_sum": self._wellbeing_sum,
+            "updates": self._updates,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> StatsTracker:
+        tracker = cls(data["agent_id"], (0, 0), data["day_length"])
+        stats = dict(data["stats"])
+        stats["death_causes"] = tuple(stats["death_causes"])
+        tracker.stats = EpisodeStats(**stats)
+        tracker._visited = {tuple(tile) for tile in data["visited"]}
+        tracker._wellbeing_sum = data["wellbeing_sum"]
+        tracker._updates = data["updates"]
+        return tracker
 
 
 def fitness_lifespan(stats: EpisodeStats) -> float:
