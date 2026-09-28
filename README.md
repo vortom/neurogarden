@@ -14,10 +14,12 @@ The first world is **Drosoville**.
 
 ## Status
 
-Sub-projects 1–3 of 5: the simulation **engine**, the training **dojo**, the
+Sub-projects 1–4 of 5: the simulation **engine**, the training **dojo**, the
 **live world** — a server, a wire protocol and a Python SDK, so several brains
-can live in one Drosoville at the same time — and the **browser client**, a
-pixel-art view of the garden you can also play in. See `docs/superpowers/specs/`.
+can live in one Drosoville at the same time — the **browser client**, a
+pixel-art view of the garden you can also play in, and the **archive**: a world
+that survives its process, and lives that can be watched again as ghosts or
+exported as datasets. See `docs/superpowers/specs/`.
 
 ## Quick start: a live garden
 
@@ -46,6 +48,28 @@ Day 3, night: Amber Zip (bob) dies of dehydration in the south.
 
 Every fly gets a name; death is final for that fly, and the owner rejoins as life
 #2. A brain that disconnects leaves its fly idling until the owner returns.
+
+## The archive: a world that survives its process
+
+`neurogarden serve` writes the world to `neurogarden.db` (SQLite, one file per
+world; `--archive` picks another path, `--archive :memory:` none at all). Stop
+the server and start it again and it is the same world: same tick, same fruit,
+same flies waiting for their owners, same lineage counters, scores and
+naturalist's log. Everything the engine was ever told is written down, so any
+life can be lived again:
+
+```bash
+uv run neurogarden lives                                   # the hall of flies
+uv run neurogarden replay --owner alice --life 2           # watch it again in the terminal
+uv run neurogarden export --owner alice --life 2 --out alice-2.npz   # (observation, action) pairs
+uv run neurogarden verify                                  # re-run the whole history, check every hash
+```
+
+In the browser, every row of the hall of flies has a 👻: it opens
+`?ghost=alice/2`, the same page replaying that life at 4× (`&speed=16` for
+faster) with the ghost highlighted. Ghost frames are regenerated through the
+engine from the archived actions — nothing but actions is stored, which is also
+why `export` gives you exactly what the brain saw.
 
 Connect your own brain with the SDK — the observation is the same dict of numpy
 arrays the dojo produces, so a brain trained offline runs live unchanged:
@@ -91,11 +115,12 @@ obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
 - **A fly senses only its surroundings**: smell, a 7×7 view, touch, its own
   body, and the light. It never learns its coordinates.
 - **Deterministic**: same seed and same actions give the same world, tick for
-  tick. A replay is a seed plus a list of actions — the live server's spawn and
-  action logs replay through the engine alone to the same state hash.
+  tick. A replay is a seed plus a list of inputs — the live server's archive
+  replays through the engine alone to the same state hash, which is what
+  `neurogarden verify` checks and what ghosts and datasets are made of.
 - **Everything is a client.** A brain on your GPU box, a hosted "NPC" brain in
-  the server process, and (soon) a human in a browser all speak the same
-  protocol; the engine never knows which is which.
+  the server process, and a human in a browser all speak the same protocol; the
+  engine never knows which is which.
 
 ## Notes
 
@@ -106,6 +131,12 @@ obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
   where the emoji tiles misalign.
 - The server refuses to bind a non-loopback host with the default token; pass
   `--token` to expose a world beyond your machine.
+- An archive holds one world: `serve` takes the map and seed from it unless you
+  pass `--map`/`--seed`, and refuses to run a different world (or a different
+  `RULES_VERSION`) on top of it — start another file instead. A clean stop
+  writes a snapshot; after a crash a resume replays at most 600 ticks from the
+  last one. Not kept across a restart: missed-tick counters and speech bubbles.
+  `*.db` files are git-ignored.
 - Browsers may only open a socket to a world from the page that world served:
   the handshake checks `Origin` against the host and port `serve` was given, so
   set `--host` to the address people will actually browse to. Clients that send
