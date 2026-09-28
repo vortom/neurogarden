@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from neurogarden.engine.events import Event
 
@@ -26,6 +26,14 @@ class EpisodeStats:
     @property
     def score(self) -> int:
         return self.lifespan
+
+    def to_dict(self) -> dict:
+        """JSON-serialisable; the causes tuple becomes a list."""
+        return asdict(self) | {"death_causes": list(self.death_causes)}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> EpisodeStats:
+        return cls(**(dict(data) | {"death_causes": tuple(data["death_causes"])}))
 
 
 class StatsTracker:
@@ -57,6 +65,26 @@ class StatsTracker:
         self._updates += 1
         self._wellbeing_sum += 1.0 - drive(body) / MAX_DRIVE
         stats.mean_wellbeing = self._wellbeing_sum / self._updates
+
+    def to_dict(self) -> dict:
+        """Everything a tracker needs to carry on after a restart (JSON-serialisable)."""
+        return {
+            "agent_id": self._agent_id,
+            "day_length": self._day_length,
+            "stats": self.stats.to_dict(),
+            "visited": sorted(self._visited),
+            "wellbeing_sum": self._wellbeing_sum,
+            "updates": self._updates,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> StatsTracker:
+        tracker = cls(data["agent_id"], (0, 0), data["day_length"])
+        tracker.stats = EpisodeStats.from_dict(data["stats"])
+        tracker._visited = {tuple(tile) for tile in data["visited"]}
+        tracker._wellbeing_sum = data["wellbeing_sum"]
+        tracker._updates = data["updates"]
+        return tracker
 
 
 def fitness_lifespan(stats: EpisodeStats) -> float:

@@ -14,8 +14,9 @@ from neurogarden.brains import RandomBrain, ScriptedBrain
 from neurogarden.engine import Config, World, maps
 from neurogarden.protocol import build_catalog
 from neurogarden.sdk import AsyncClient, ConnectionLost, ServerError, Session, run_brain
-from neurogarden.server import Server, ServerConfig
+from neurogarden.server import Server, ServerConfig, history
 from neurogarden.server import frames as server_frames
+from neurogarden.server.gateway import REPLAY_INTERVAL
 
 FAST = dict(port=0, tps=50.0, npcs=[], hello_timeout=0.5)
 JOIN_FRAME = '{"v": 1, "type": "join", "payload": {}}'
@@ -415,13 +416,158 @@ def test_server_actions_replay_through_the_engine_alone():
             server.stop.set()
             await server._ticker
             runner = server.runner
-            return runner.spawn_log, list(runner.action_log), runner.world.state_hash()
+            return list(runner.archive.inputs(0)), runner.world.state_hash()
 
-    spawn_log, action_log, expected = run(scenario())
+    inputs, expected = run(scenario())
     replay = World.from_map(maps.load("drosoville"), Config(), seed=11)
-    for tick, actions in enumerate(action_log):
-        for spawn_tick, agent_id, *_ in spawn_log:  # spawns of this tick, in join order
-            if spawn_tick == tick:
-                assert replay.spawn() == agent_id
-        replay.step(actions)
+    for tick in inputs:
+        history.apply_inputs(replay, tick)
     assert replay.state_hash() == expected
+
+
+async def _short_life(server):
+    """Hatch alice with a starving config and wait for the obituary; returns the died payload."""
+    async with AsyncClient(server.url, owner="alice") as alice:
+        await alice.join()
+        async for observation in alice.observations():
+            await alice.act(observation.tick, 0)
+        return alice.last_died
+
+
+def test_a_spectator_watches_an_archived_life_again_as_a_ghost():
+    async def scenario():
+        config = Config(initial_satiety=6, initial_health=5)
+        async with Server(ServerConfig(**FAST, config=config)) as server:
+            died = await _short_life(server)
+            async with connect(server.url) as ws:
+                await ws.send(hello_frame("w", role="spectator"))
+                await ws.recv()  # welcome
+                ask = {"owner": "alice", "lineage": 1, "speed": 2}
+                await ws.send(json.dumps({"v": 1, "type": "replay", "payload": ask}))
+                seen = []
+                while True:
+                    message = json.loads(await ws.recv())
+                    seen.append(message)
+                    if message["type"] == "replay" and message["payload"]["done"]:
+                        break
+                back = json.loads(await ws.recv())  # the living garden again, from the map
+                assert back["type"] == "world"
+                await asyncio.sleep(REPLAY_INTERVAL)  # one ghost a second per spectator
+                await ws.send(
+                    '{"v": 1, "type": "replay", "payload": {"owner": "alice", "lineage": 9}}'
+                )
+                while (refusal := json.loads(await ws.recv()))["type"] != "error":
+                    pass  # live chronicle lines and frames until the refusal lands
+                assert refusal["payload"]["code"] == "no_such_life"
+                live = json.loads(await ws.recv())  # still a live spectator after the refusal
+                assert live["type"] in {"frame", "chronicle", "world"}
+            async with connect(server.url) as agent:  # a brain has no business replaying
+                await agent.send(hello_frame("bob"))
+                await agent.recv()  # welcome
+                await agent.send(
+                    '{"v": 1, "type": "replay", "payload": {"owner": "alice", "lineage": 1}}'
+                )
+                refused = json.loads(await agent.recv())
+                assert refused["type"] == "error" and refused["payload"]["code"] == "spectator"
+            return died, seen
+
+    died, seen = run(scenario())
+    kinds = [m["type"] for m in seen]
+    start = kinds.index("replay")  # the live world and its log arrive first, as for anyone
+    assert set(kinds[:start]) <= {"world", "chronicle"} and kinds[start - 1] == "world"
+    assert set(kinds[start:]) == {"replay", "frame", "chronicle"}  # the lines of those days
+    assert kinds[-1] == "replay"
+    told = [m["payload"]["text"] for m in seen[start:] if m["type"] == "chronicle"]
+    assert any("hatches" in text for text in told) and any("dies of" in text for text in told)
+    ghost = seen[start]["payload"]
+    assert (ghost["owner"], ghost["lineage"], ghost["done"]) == ("alice", 1, False)
+    assert ghost["died_tick"] == died.tick and ghost["lifespan"] == died.stats.lifespan
+    assert ghost["speed"] == 2 and ghost["causes"] == ["starvation"]
+    frames = [m["payload"] for m in seen if m["type"] == "frame"]
+    assert frames and frames[0]["tick"] == ghost["born_tick"] and frames[-1]["tick"] == died.tick
+    first = next(a for a in frames[0]["agents"] if a["owner"] == "alice")
+    assert first["name"] == died.name and first["connected"] and first["alive"]
+    last = next(a for a in frames[-1]["agents"] if a["owner"] == "alice")
+    assert not last["alive"] and last["mood"] == "dead"
+    assert all(f["scores"] == [] for f in frames)
+
+
+def test_a_ghost_of_a_life_still_going_ends_where_the_archive_stood():
+    async def scenario():
+        async with Server(ServerConfig(**{**FAST, "npcs": [("scripted", 1)]})) as server:
+            await asyncio.sleep(0.2)
+            async with connect(server.url) as ws:
+                await ws.send(hello_frame("w", role="spectator"))
+                await ws.recv()  # welcome
+                asked_at = server.runner.archive.next_tick()
+                ask = {"owner": "npc-scripted-1", "lineage": 1, "speed": 0.5}  # slower than life
+                await ws.send(json.dumps({"v": 1, "type": "replay", "payload": ask}))
+                header = last_frame = None
+                while True:
+                    message = json.loads(await asyncio.wait_for(ws.recv(), 10))
+                    if message["type"] == "replay":
+                        if message["payload"]["done"]:
+                            break
+                        header = message["payload"]
+                    elif message["type"] == "frame" and header is not None:
+                        last_frame = message["payload"]
+                return asked_at, header, last_frame
+
+    asked_at, header, last_frame = run(scenario())
+    assert header["died_tick"] is None and header["lifespan"] is None
+    assert last_frame is not None and last_frame["tick"] == asked_at - 1
+
+
+def test_stopping_a_ghost_does_not_swallow_the_callers_own_cancellation():
+    from neurogarden.server.gateway import Gateway
+    from test_runner import FakePort, make_runner
+
+    async def scenario():
+        gateway = Gateway(make_runner(), "dev")
+        port = FakePort("w", role="spectator")
+        gateway._ghosts[port] = asyncio.get_running_loop().create_task(asyncio.sleep(10))
+
+        async def caller():
+            await gateway._stop_ghost(port)
+            return "carried on"
+
+        task = asyncio.get_running_loop().create_task(caller())
+        await asyncio.sleep(0)  # the caller is now waiting for the ghost to die
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert gateway._ghosts == {}
+
+    run(scenario())
+
+
+def test_a_spectator_gets_one_ghost_a_second_and_a_lineage_that_fits():
+    async def scenario():
+        config = Config(initial_satiety=6, initial_health=5)
+        async with Server(ServerConfig(**FAST, config=config)) as server:
+            await _short_life(server)
+            async with connect(server.url) as ws:
+                await ws.send(hello_frame("w", role="spectator"))
+                await ws.recv()  # welcome
+                ask = {"v": 1, "type": "replay", "payload": {"owner": "alice", "lineage": 1}}
+                await ws.send(json.dumps(ask))
+                await ws.send(json.dumps(ask))  # again at once: refused, the first plays on
+                codes = []
+                while len(codes) < 1:
+                    message = json.loads(await asyncio.wait_for(ws.recv(), 5))
+                    if message["type"] == "error":
+                        codes.append(message["payload"]["code"])
+                too_many = {
+                    "v": 1,
+                    "type": "replay",
+                    "payload": {"owner": "alice", "lineage": 10**25},
+                }
+                await ws.send(json.dumps(too_many))
+                with pytest.raises(Exception) as closed:  # malformed: the socket is closed
+                    for _ in range(200):
+                        await asyncio.wait_for(ws.recv(), 5)
+                return codes, closed.value
+
+    codes, closed = run(scenario())
+    assert codes == ["replay_busy"]
+    assert getattr(closed, "rcvd", None) is not None and closed.rcvd.code == 4000

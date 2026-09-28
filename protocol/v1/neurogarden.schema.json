@@ -400,6 +400,7 @@
           "hello": "#/$defs/HelloMessage",
           "join": "#/$defs/JoinMessage",
           "leave": "#/$defs/LeaveMessage",
+          "replay": "#/$defs/ReplayMessage",
           "say": "#/$defs/SayMessage"
         },
         "propertyName": "type"
@@ -419,6 +420,9 @@
         },
         {
           "$ref": "#/$defs/SayMessage"
+        },
+        {
+          "$ref": "#/$defs/ReplayMessage"
         }
       ]
     },
@@ -869,6 +873,11 @@
           "title": "Best Lifespan",
           "type": "integer"
         },
+        "best_lineage": {
+          "default": 0,
+          "title": "Best Lineage",
+          "type": "integer"
+        },
         "lives": {
           "title": "Lives",
           "type": "integer"
@@ -885,6 +894,156 @@
         "alive"
       ],
       "title": "OwnerScore",
+      "type": "object"
+    },
+    "Replay": {
+      "additionalProperties": false,
+      "description": "A spectator asks to watch an archived life again: a ghost, at `speed` \u00d7 the world's pace.",
+      "properties": {
+        "lineage": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Lineage",
+          "type": "integer"
+        },
+        "owner": {
+          "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+          "title": "Owner",
+          "type": "string"
+        },
+        "speed": {
+          "default": 4.0,
+          "maximum": 64.0,
+          "minimum": 0.25,
+          "title": "Speed",
+          "type": "number"
+        }
+      },
+      "required": [
+        "owner",
+        "lineage"
+      ],
+      "title": "Replay",
+      "type": "object"
+    },
+    "ReplayInfo": {
+      "description": "Brackets a ghost: sent before its first frame (`done` false) and after its last.",
+      "properties": {
+        "born_tick": {
+          "title": "Born Tick",
+          "type": "integer"
+        },
+        "causes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Causes",
+          "type": "array"
+        },
+        "died_tick": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Died Tick"
+        },
+        "done": {
+          "title": "Done",
+          "type": "boolean"
+        },
+        "lifespan": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Lifespan"
+        },
+        "lineage": {
+          "title": "Lineage",
+          "type": "integer"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "owner": {
+          "title": "Owner",
+          "type": "string"
+        },
+        "speed": {
+          "title": "Speed",
+          "type": "number"
+        }
+      },
+      "required": [
+        "owner",
+        "lineage",
+        "name",
+        "born_tick",
+        "died_tick",
+        "lifespan",
+        "causes",
+        "speed",
+        "done"
+      ],
+      "title": "ReplayInfo",
+      "type": "object"
+    },
+    "ReplayInfoMessage": {
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/ReplayInfo"
+        },
+        "type": {
+          "const": "replay",
+          "default": "replay",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "title": "ReplayInfoMessage",
+      "type": "object"
+    },
+    "ReplayMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/Replay"
+        },
+        "type": {
+          "const": "replay",
+          "default": "replay",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "title": "ReplayMessage",
       "type": "object"
     },
     "ResourceView": {
@@ -967,6 +1126,7 @@
           "frame": "#/$defs/FrameMessage",
           "joined": "#/$defs/JoinedMessage",
           "observation": "#/$defs/ObservationMessage",
+          "replay": "#/$defs/ReplayInfoMessage",
           "welcome": "#/$defs/WelcomeMessage",
           "world": "#/$defs/WorldMessage"
         },
@@ -996,6 +1156,9 @@
         },
         {
           "$ref": "#/$defs/ErrorMessage"
+        },
+        {
+          "$ref": "#/$defs/ReplayInfoMessage"
         }
       ]
     },

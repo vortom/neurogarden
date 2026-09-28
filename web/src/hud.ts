@@ -1,4 +1,5 @@
 // The DOM around the canvas: status, roster, log, scores, and the play panel.
+import { ghostBanner, ghostQuery } from "./ghost";
 import {
   DEFAULT_CONSTANTS,
   DEFAULT_PHASES,
@@ -6,6 +7,7 @@ import {
   type Garden,
   constants,
   dayPhases,
+  focusId,
   livingFlies,
   myFly,
 } from "./state";
@@ -66,6 +68,7 @@ export class Hud {
   readonly scores: HTMLElement;
   readonly mine: HTMLElement;
   readonly notice: HTMLElement;
+  readonly ghost: HTMLElement;
 
   constructor(root: HTMLElement) {
     this.status = root.querySelector("#status")!;
@@ -74,6 +77,7 @@ export class Hud {
     this.scores = root.querySelector("#scores")!;
     this.mine = root.querySelector("#mine")!;
     this.notice = root.querySelector("#notice")!;
+    this.ghost = root.querySelector("#ghost")!;
   }
 
   update(garden: Garden): void {
@@ -87,9 +91,18 @@ export class Hud {
       this.status.textContent = `Day ${frame.day} · ${timeOfDay(frame.tick, phases)} ${sky} · tick ${frame.tick}`;
     }
 
+    this.ghost.replaceChildren();
+    this.ghost.hidden = garden.ghost === null;
+    if (garden.ghost !== null) {
+      this.ghost.appendChild(el("span", undefined, ghostBanner(garden.ghost, frame?.tick ?? null)));
+      const back = el("a", "ghost-back", garden.ghost.done ? "back to the living" : "the living garden");
+      back.href = location.pathname;
+      this.ghost.appendChild(back);
+    }
+
     this.roster.replaceChildren();
     if (frame !== null) {
-      const mineId = garden.me.joined?.agent_id ?? -1;
+      const mineId = focusId(garden);
       for (const a of livingFlies(frame).sort((p, q) => p.owner.localeCompare(q.owner))) {
         const row = el("div", `fly-row${a.agent_id === mineId ? " mine" : ""}${a.connected ? "" : " away"}`);
         const head = el("div", "fly-head");
@@ -113,7 +126,14 @@ export class Hud {
       for (const s of frame.scores.slice(0, 8)) {
         const row = el("div", "score-row");
         row.appendChild(el("span", "score-owner", s.owner));
-        row.appendChild(el("span", "score-best", `${s.best_lifespan} ticks · ${s.lives} ${s.lives === 1 ? "life" : "lives"}${s.alive ? " · alive" : ""}`));
+        const best = el("span", "score-best", `${s.best_lifespan} ticks · ${s.lives} ${s.lives === 1 ? "life" : "lives"}${s.alive ? " · alive" : ""}`);
+        if (s.best_lineage) {
+          const ghost = el("a", "score-ghost", " 👻");
+          ghost.href = ghostQuery(s.owner, s.best_lineage);
+          ghost.title = `watch ${s.owner}'s best life again`;
+          best.appendChild(ghost);
+        }
+        row.appendChild(best);
         this.scores.appendChild(row);
       }
     }

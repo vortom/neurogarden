@@ -8,7 +8,7 @@ from websockets.exceptions import ConnectionClosedError
 from neurogarden.brains import ScriptedBrain
 from neurogarden.engine import Action, Config, World, maps
 from neurogarden.protocol.messages import encode
-from neurogarden.server import frames
+from neurogarden.server import frames, history
 from neurogarden.server.ports import LocalPort, RemotePort
 from neurogarden.server.runner import SAY_TTL, WorldRunner
 
@@ -61,6 +61,19 @@ def joined_agent(runner, owner="alice"):
     return port
 
 
+def actions_of(runner):
+    """The actions applied per tick, as the archive recorded them."""
+    return [inputs.actions for inputs in runner.archive.inputs(0)]
+
+
+def spawns_of(runner):
+    """(tick, agent_id, owner, lineage, body) per hatching, from the archive."""
+    return [
+        (life.born_tick, life.agent_id, life.owner, life.lineage, life.body)
+        for life in runner.archive.lives()
+    ]
+
+
 def test_join_is_queued_until_the_tick_then_spawns_and_observes():
     runner = make_runner()
     port = FakePort("alice")
@@ -74,8 +87,8 @@ def test_join_is_queued_until_the_tick_then_spawns_and_observes():
     observation = port.last("observation")
     assert observation.tick == 0 and observation.missed == 0
     assert observation.channels.body[4] == 1  # the fly idled through its birth tick
-    assert runner.spawn_log == [(0, 1, "alice", 1, "fly")]
-    assert runner.action_log == [{1: int(Action.IDLE)}]
+    assert spawns_of(runner) == [(0, 1, "alice", 1, "fly")]
+    assert actions_of(runner) == [{1: int(Action.IDLE)}]
     assert json.loads(encode(port.inbox[-1]))["type"] == "observation"
 
 
@@ -84,18 +97,18 @@ def test_action_for_the_current_tick_is_applied_and_late_ones_count_as_missed():
     port = joined_agent(runner)
     assert runner.submit_action(port, tick=0, action=int(Action.MOVE_E))
     runner.tick()
-    assert runner.action_log[-1] == {1: int(Action.MOVE_E)}
+    assert actions_of(runner)[-1] == {1: int(Action.MOVE_E)}
     assert runner.world.state.agents[1].x == 3
     assert port.last("observation").missed == 0
     assert not runner.submit_action(port, tick=0, action=1)  # stale
     assert not runner.submit_action(port, tick=5, action=1)  # from the future
     runner.tick()
-    assert runner.action_log[-1] == {1: int(Action.IDLE)}
+    assert actions_of(runner)[-1] == {1: int(Action.IDLE)}
     assert port.last("observation").missed == 1
     assert runner.submit_action(port, tick=2, action=int(Action.REST))
     assert runner.submit_action(port, tick=2, action=int(Action.MOVE_W))  # latest wins
     runner.tick()
-    assert runner.action_log[-1] == {1: int(Action.MOVE_W)}
+    assert actions_of(runner)[-1] == {1: int(Action.MOVE_W)}
 
 
 def test_detached_fly_idles_without_counting_and_reattach_resumes():
@@ -301,7 +314,7 @@ def test_local_port_plays_a_brain_and_rejoins_after_death():
         runner.tick()
     assert port.lives >= 2
     assert runner.roster.state("npc-scripted-1").lineage >= 2
-    played = [action for tick in runner.action_log for action in tick.values()]
+    played = [action for tick in actions_of(runner) for action in tick.values()]
     assert any(action != int(Action.IDLE) for action in played)  # the brain acted, in-process
 
 
@@ -357,7 +370,7 @@ def test_a_hosted_brain_that_raises_idles_and_keeps_its_fly(caplog):
     runner.tick()
     runner.tick()
     assert runner.roster.live_agent("npc-broken-1") == 1
-    assert runner.action_log[-1] == {1: int(Action.IDLE)}
+    assert actions_of(runner)[-1] == {1: int(Action.IDLE)}
     assert runner.missed[1] == 1
     assert "failed to act" in caplog.text
 
@@ -374,7 +387,7 @@ def test_a_join_that_cannot_hatch_answers_world_full_without_stopping_the_tick()
     refusal = bob.last("error")
     assert (refusal.code, refusal.fatal) == ("world_full", False)
     assert runner.roster.live_agent("bob") is None
-    assert len(runner.action_log) == 1  # the tick finished
+    assert runner.archive.tick_count() == 1  # the tick finished
 
 
 def test_a_world_that_arrives_with_flies_the_runner_never_hatched_keeps_ticking():
@@ -388,8 +401,8 @@ def test_a_world_that_arrives_with_flies_the_runner_never_hatched_keeps_ticking(
     assert [a.agent_id for a in watcher.last("frame").agents] == [2]  # the stranger is not ours
     for _ in range(3):
         runner.tick()  # the stranger starves: no roster entry, no observation, no KeyError
-    assert not world.state.agents[stranger].alive
-    assert runner.action_log[0][stranger] == int(Action.IDLE)
+    assert stranger not in world.state.agents  # starved, then cleared like any corpse
+    assert actions_of(runner)[0][stranger] == int(Action.IDLE)
     assert not any(m.payload.agent_id == stranger for m in port.inbox if m.type == "died")
 
 
@@ -471,9 +484,8 @@ def test_tick_order_is_deterministic_from_the_logs():
         runner.submit_action(bob, bob.last("observation").tick, int(Action.REST))
         runner.tick()
     replay = World.from_map(maps.load("drosoville"), Config(), seed=1)
-    for tick, actions in enumerate(runner.action_log):
-        for spawn_tick, agent_id, *_ in runner.spawn_log:
-            if spawn_tick == tick:
-                assert replay.spawn() == agent_id
-        replay.step(actions)
+    for inputs in runner.archive.inputs(0):
+        history.apply_inputs(replay, inputs)
     assert replay.state_hash() == runner.world.state_hash()
+    last = list(history.playback(runner.archive, 0))[-1]
+    assert last.tick == 31 and last.world.state_hash() == runner.world.state_hash()

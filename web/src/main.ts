@@ -1,8 +1,9 @@
+import { parseGhost } from "./ghost";
 import { Hud } from "./hud";
 import { Keys, actionId } from "./input";
 import { open, serverUrl, type Socket } from "./net";
 import { PlaySession } from "./play";
-import { action, join, leave, say } from "./protocol";
+import { action, join, leave, replay, say } from "./protocol";
 import { Renderer, scaleFor } from "./render";
 import { applyAgentMessage, applySpectatorMessage, emptyGarden, flyActions, noFly } from "./state";
 import type { WorldMap } from "./types";
@@ -43,10 +44,18 @@ const hatchButton = document.querySelector<HTMLButtonElement>("#hatch")!;
 
 nameInput.value = recall(OWNER_KEY);
 
+// `?ghost=owner/lineage` opens the page on an archived life: watch only, no fly of our own.
+const ghost = parseGhost(location.search);
+document.querySelector<HTMLElement>("#play-panel")!.closest("section")!.hidden = ghost !== null;
+
 let dirty = true;
 const url = serverUrl();
-open(url, "web-watcher", "spectator", {
+let spectator: Socket | null = null;
+spectator = open(url, ghost === null ? "web-watcher" : "ghost-watcher", "spectator", {
   onMessage(message) {
+    if (message.type === "welcome" && ghost !== null) {
+      spectator?.send(replay(ghost.owner, ghost.lineage, ghost.speed));
+    }
     if (applySpectatorMessage(garden, message)) dirty = true;
   },
   onClose(code, reason) {
@@ -59,6 +68,7 @@ open(url, "web-watcher", "spectator", {
 let agent: Socket | null = null;
 
 function play(): void {
+  if (ghost !== null) return; // a ghost's garden is for watching
   const owner = nameInput.value.trim();
   if (!OWNER_PATTERN.test(owner)) {
     garden.notice = "pick a name: letters, digits, _ . - (up to 64)";

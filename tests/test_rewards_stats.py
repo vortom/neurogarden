@@ -93,3 +93,17 @@ def test_tracker_records_days_death_and_mean_wellbeing():
     assert stats.mean_wellbeing == pytest.approx((1.0 + 0.75) / 2)
     tracker.update([], BodyState(1000, 1000, 1000, 1000, 9))
     assert tracker.stats.days == 2
+
+
+def test_a_tracker_carries_on_after_a_round_trip_through_json():
+    import json
+
+    tracker = StatsTracker(agent_id=1, start=(2, 2), day_length=4)
+    tracker.update([Event(0, "moved", 1, {"from": (2, 2), "to": (3, 2), "direction": 1})], FULL)
+    tracker.update([Event(1, "ate", 1, {"bites_left": 3})], BodyState(500, 500, 500, 1000, 2))
+    twin = StatsTracker.from_dict(json.loads(json.dumps(tracker.to_dict())))
+    later = [Event(2, "moved", 1, {"from": (3, 2), "to": (2, 2), "direction": 3})]
+    tracker.update(later, BodyState(400, 400, 400, 1000, 9))
+    twin.update(later, BodyState(400, 400, 400, 1000, 9))
+    assert twin.stats == tracker.stats
+    assert twin.stats.tiles_explored == 2 and twin.stats.days == 2

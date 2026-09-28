@@ -7,3 +7,9 @@ dist/
 web/node_modules/
 web/.vite/
 web/coverage/
+
+# worlds written by `neurogarden serve` in the repo root (SQLite, WAL side files, the lock)
+/*.db
+/*.db-wal
+/*.db-shm
+/*.db.lock

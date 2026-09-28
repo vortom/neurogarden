@@ -44,6 +44,10 @@ class Mailbox:
             await self._wakeup.wait()
         return self._queue.popleft()
 
+    def holds(self, kind: str) -> bool:
+        """True while a message of this type is still waiting to be sent."""
+        return any(message.type == kind for message in self._queue)
+
     def __len__(self) -> int:
         return len(self._queue)
 

@@ -200,3 +200,31 @@ def test_spawn_rejects_non_integral_coordinates():
     world = World.from_map(MAP)
     with pytest.raises(ValueError):
         world.spawn(at=(1.9, 1.2))
+
+
+def test_despawn_removes_only_the_dead_and_changes_the_hash():
+    world = World.from_map(MAP, Config(initial_satiety=1, initial_health=5))
+    fly, other = world.spawn(), world.spawn(at=(5, 3))
+    with pytest.raises(ValueError, match="alive"):
+        world.despawn(fly)
+    world.step({fly: Action.IDLE})  # both starve at once; only one corpse is cleared
+    before = world.state_hash()
+    world.despawn(fly)
+    assert fly not in world.state.agents and other in world.state.agents
+    assert world.state_hash() != before
+    assert world.state.next_agent_id == other + 1  # ids are never reused
+    with pytest.raises(ValueError, match="unknown agent"):
+        world.despawn(fly)
+    with pytest.raises(ValueError, match="unknown agent"):
+        world.step({fly: Action.IDLE})
+
+
+def test_a_despawned_world_restores_to_the_same_hash_and_keeps_its_map():
+    world = World.from_map(MAP, Config(initial_satiety=1, initial_health=5), seed=4)
+    fly = world.spawn()
+    world.step({fly: Action.IDLE})
+    world.despawn(fly)
+    restored = World.restore(json.loads(json.dumps(world.snapshot())), world.map_text)
+    assert restored.state_hash() == world.state_hash()
+    assert restored.map_text == world.map_text
+    assert World.restore(world.snapshot()).map_text is None
