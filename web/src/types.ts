@@ -16,6 +16,7 @@ export type ResourceView = P.ResourceView;
 export type OwnerScore = P.OwnerScore;
 export type Chronicle = P.Chronicle;
 export type ErrorPayload = P.Error;
+export type ReplayInfo = P.ReplayInfo;
 
 export const PROTOCOL_VERSION = 1;
 

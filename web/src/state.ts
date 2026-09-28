@@ -5,6 +5,7 @@ import type {
   Frame,
   Joined,
   Observation,
+  ReplayInfo,
   ServerMessage,
   Welcome,
   WorldMap,
@@ -29,6 +30,8 @@ export interface Garden {
   chronicle: string[];
   /** The human's own fly, when playing. */
   me: Me;
+  /** The archived life being watched again, when the page was opened on a ghost. */
+  ghost: ReplayInfo | null;
   notice: string | null;
 }
 
@@ -43,6 +46,7 @@ export function emptyGarden(): Garden {
     frame: null,
     chronicle: [],
     me: noFly(),
+    ghost: null,
     notice: null,
   };
 }
@@ -68,12 +72,26 @@ export function applySpectatorMessage(garden: Garden, message: ServerMessage): b
       garden.chronicle.push(message.payload.text);
       if (garden.chronicle.length > LOG_LINES) garden.chronicle.splice(0, garden.chronicle.length - LOG_LINES);
       return true;
+    case "replay":
+      garden.ghost = message.payload;
+      if (!message.payload.done) garden.frame = null; // the ghost's first frame is still to come
+      return true;
     case "error":
       garden.notice = `${message.payload.code}: ${message.payload.message}`;
       return true;
     default:
       return false;
   }
+}
+
+/** The fly the page is about: the human's own, or the ghost being watched. */
+export function focusId(garden: Garden): number {
+  const mine = garden.me.joined?.agent_id;
+  if (mine !== undefined) return mine;
+  const ghost = garden.ghost;
+  if (ghost === null || garden.frame === null) return -1;
+  const fly = garden.frame.agents.find((a: AgentView) => a.owner === ghost.owner && a.lineage === ghost.lineage);
+  return fly?.agent_id ?? -1;
 }
 
 /** Apply a message from the agent socket (the human's fly). */
@@ -139,7 +157,7 @@ export function actorList(garden: Garden): Draw[] {
     if (r.kind !== RESOURCE.fruit) continue;
     out.push({ kind: "resource", x: r.x, y: r.y, resource: r.kind, amount: r.amount });
   }
-  const mine = garden.me.joined?.agent_id ?? -1;
+  const mine = focusId(garden);
   for (const a of livingFlies(frame)) {
     out.push({ kind: "fly", x: a.x, y: a.y, facing: a.facing, agentId: a.agent_id, mine: a.agent_id === mine, away: !a.connected });
   }

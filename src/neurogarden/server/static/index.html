@@ -54,18 +54,22 @@
       button { cursor: pointer; }
       button:hover { border-color: var(--accent); }
       #notice { color: #ffb347; }
+      #ghost { color: #b9a7ff; display: flex; gap: 12px; align-items: baseline; }
+      #ghost a, .score-ghost { color: var(--muted); text-decoration: none; }
+      #ghost a:hover, .score-ghost:hover { color: var(--accent); }
       .muted { color: var(--muted); }
       .obituary, .me-card { border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
       .obituary h3, .me-card h3 { margin: 0 0 4px; font-size: 14px; }
       .obituary p, .me-card p { margin: 2px 0; }
       [hidden] { display: none !important; }
     </style>
-    <script type="module" crossorigin src="./assets/index-C98ckmuz.js"></script>
+    <script type="module" crossorigin src="./assets/index-DcrjYgZu.js"></script>
   </head>
   <body>
     <main>
       <h1>NEUROGARDEN <small>Small worlds. Strange minds.</small></h1>
       <div id="status">connecting…</div>
+      <div id="ghost" hidden></div>
       <canvas id="garden" width="512" height="384"></canvas>
       <div id="notice" hidden></div>
     </main>

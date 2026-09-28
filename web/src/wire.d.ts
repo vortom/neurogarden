@@ -4,7 +4,8 @@
  * Envelope {v, type, payload}; unknown types are ignored by receivers.
  */
 export type NeuroGardenProtocolV1 = ClientMessage | ServerMessage;
-export type ClientMessage = HelloMessage | JoinMessage | ActionMessage | LeaveMessage | SayMessage;
+export type ClientMessage =
+  HelloMessage | JoinMessage | ActionMessage | LeaveMessage | SayMessage | ReplayMessage;
 export type Client = string;
 export type Owner = string;
 export type Protocol = number;
@@ -24,6 +25,11 @@ export type V3 = 1;
 export type Text = string;
 export type Type4 = "say";
 export type V4 = 1;
+export type Lineage = number;
+export type Owner1 = string;
+export type Speed = number;
+export type Type5 = "replay";
+export type V5 = 1;
 export type ServerMessage =
   | WelcomeMessage
   | JoinedMessage
@@ -32,7 +38,8 @@ export type ServerMessage =
   | WorldMessage
   | FrameMessage
   | ChronicleMessage
-  | ErrorMessage;
+  | ErrorMessage
+  | ReplayInfoMessage;
 export type Actions = string[];
 export type Centre = number[] | null;
 export type Dtype = string;
@@ -42,7 +49,7 @@ export type NorthUp = boolean | null;
 export type Shape = number[];
 export type Frame = string;
 export type Motd = string;
-export type Owner1 = string;
+export type Owner2 = string;
 export type Protocol1 = number;
 export type Role1 = "agent" | "spectator";
 export type DawnEnd = number;
@@ -54,30 +61,30 @@ export type NightStart = number;
 export type RulesVersion = number;
 export type Tps = number;
 export type Width = number;
-export type Type5 = "welcome";
-export type V5 = 1;
+export type Type6 = "welcome";
+export type V6 = 1;
 export type AgentId = number;
-export type Lineage = number;
+export type Lineage1 = number;
 export type Name1 = string;
 export type Reattached = boolean;
 export type Tick1 = number;
-export type Type6 = "joined";
-export type V6 = 1;
+export type Type7 = "joined";
+export type V7 = 1;
 export type Body1 = number[];
 export type Env = number[];
 export type Smell = number[][];
 export type Touch = number[];
 export type Vision = number[][][];
 export type DeadlineMs = number;
-export type Type7 = string;
+export type Type8 = string;
 export type Events1 = AgentEvent[];
 export type Missed = number;
 export type Tick2 = number;
-export type Type8 = "observation";
-export type V7 = 1;
+export type Type9 = "observation";
+export type V8 = 1;
 export type AgentId1 = number;
 export type Causes = string[];
-export type Lineage1 = number;
+export type Lineage2 = number;
 export type Name2 = string;
 export type Bites = number;
 export type Bumps = number;
@@ -89,14 +96,14 @@ export type MeanWellbeing = number;
 export type RestTicks = number;
 export type TilesExplored = number;
 export type Tick3 = number;
-export type Type9 = "died";
-export type V8 = 1;
+export type Type10 = "died";
+export type V9 = 1;
 export type Height1 = number;
 export type MapName = string;
 export type Terrain = number[][];
 export type Width1 = number;
-export type Type10 = "world";
-export type V9 = 1;
+export type Type11 = "world";
+export type V10 = 1;
 export type Age = number;
 export type AgentId2 = number;
 export type Alive = boolean;
@@ -105,10 +112,10 @@ export type Energy = number;
 export type Facing = number;
 export type Health = number;
 export type Hydration = number;
-export type Lineage2 = number;
+export type Lineage3 = number;
 export type Mood = string;
 export type Name3 = string;
-export type Owner2 = string;
+export type Owner3 = string;
 export type Satiety = number;
 export type Say1 = string;
 export type X = number;
@@ -116,7 +123,7 @@ export type Y = number;
 export type Agents = AgentView[];
 export type Day = number;
 export type AgentId3 = number | null;
-export type Type11 = string;
+export type Type12 = string;
 export type Events2 = WorldEvent[];
 export type Light = number;
 export type Amount = number;
@@ -126,21 +133,33 @@ export type Y1 = number;
 export type Resources = ResourceView[];
 export type Alive1 = boolean;
 export type BestLifespan = number;
+export type BestLineage = number;
 export type Lives = number;
-export type Owner3 = string;
+export type Owner4 = string;
 export type Scores = OwnerScore[];
 export type Tick4 = number;
-export type Type12 = "frame";
-export type V10 = 1;
+export type Type13 = "frame";
+export type V11 = 1;
 export type Text1 = string;
 export type Tick5 = number;
-export type Type13 = "chronicle";
-export type V11 = 1;
+export type Type14 = "chronicle";
+export type V12 = 1;
 export type Code = string;
 export type Fatal = boolean;
 export type Message = string;
-export type Type14 = "error";
-export type V12 = 1;
+export type Type15 = "error";
+export type V13 = 1;
+export type BornTick = number;
+export type Causes1 = string[];
+export type DiedTick = number | null;
+export type Done = boolean;
+export type Lifespan1 = number | null;
+export type Lineage4 = number;
+export type Name4 = string;
+export type Owner5 = string;
+export type Speed1 = number;
+export type Type16 = "replay";
+export type V14 = 1;
 
 export interface HelloMessage {
   payload: Hello;
@@ -188,15 +207,28 @@ export interface SayMessage {
 export interface Say {
   text: Text;
 }
-export interface WelcomeMessage {
-  payload: Welcome;
+export interface ReplayMessage {
+  payload: Replay;
   type?: Type5;
   v?: V5;
+}
+/**
+ * A spectator asks to watch an archived life again: a ghost, at `speed` × the world's pace.
+ */
+export interface Replay {
+  lineage: Lineage;
+  owner: Owner1;
+  speed?: Speed;
+}
+export interface WelcomeMessage {
+  payload: Welcome;
+  type?: Type6;
+  v?: V6;
 }
 export interface Welcome {
   catalog: Catalog;
   motd?: Motd;
-  owner: Owner1;
+  owner: Owner2;
   protocol: Protocol1;
   role: Role1;
   world: WorldInfo;
@@ -254,20 +286,20 @@ export interface WorldInfo {
 }
 export interface JoinedMessage {
   payload: Joined;
-  type?: Type6;
-  v?: V6;
+  type?: Type7;
+  v?: V7;
 }
 export interface Joined {
   agent_id: AgentId;
-  lineage: Lineage;
+  lineage: Lineage1;
   name: Name1;
   reattached: Reattached;
   tick: Tick1;
 }
 export interface ObservationMessage {
   payload: Observation;
-  type?: Type8;
-  v?: V7;
+  type?: Type9;
+  v?: V8;
 }
 export interface Observation {
   channels: Channels1;
@@ -285,20 +317,20 @@ export interface Channels1 {
 }
 export interface AgentEvent {
   data?: Data;
-  type: Type7;
+  type: Type8;
 }
 export interface Data {
   [k: string]: unknown;
 }
 export interface DiedMessage {
   payload: Died;
-  type?: Type9;
-  v?: V8;
+  type?: Type10;
+  v?: V9;
 }
 export interface Died {
   agent_id: AgentId1;
   causes: Causes;
-  lineage: Lineage1;
+  lineage: Lineage2;
   name: Name2;
   stats: Stats;
   tick: Tick3;
@@ -316,8 +348,8 @@ export interface Stats {
 }
 export interface WorldMessage {
   payload: WorldMap;
-  type?: Type10;
-  v?: V9;
+  type?: Type11;
+  v?: V10;
 }
 export interface WorldMap {
   height: Height1;
@@ -327,8 +359,8 @@ export interface WorldMap {
 }
 export interface FrameMessage {
   payload: Frame1;
-  type?: Type12;
-  v?: V10;
+  type?: Type13;
+  v?: V11;
 }
 export interface Frame1 {
   agents: Agents;
@@ -348,10 +380,10 @@ export interface AgentView {
   facing: Facing;
   health: Health;
   hydration: Hydration;
-  lineage: Lineage2;
+  lineage: Lineage3;
   mood: Mood;
   name: Name3;
-  owner: Owner2;
+  owner: Owner3;
   satiety: Satiety;
   say?: Say1;
   x: X;
@@ -360,7 +392,7 @@ export interface AgentView {
 export interface WorldEvent {
   agent_id: AgentId3;
   data?: Data1;
-  type: Type11;
+  type: Type12;
 }
 export interface Data1 {
   [k: string]: unknown;
@@ -377,13 +409,14 @@ export interface ResourceView {
 export interface OwnerScore {
   alive: Alive1;
   best_lifespan: BestLifespan;
+  best_lineage?: BestLineage;
   lives: Lives;
-  owner: Owner3;
+  owner: Owner4;
 }
 export interface ChronicleMessage {
   payload: Chronicle;
-  type?: Type13;
-  v?: V11;
+  type?: Type14;
+  v?: V12;
 }
 /**
  * One line of the naturalist's log, written by the server from what happened.
@@ -394,11 +427,30 @@ export interface Chronicle {
 }
 export interface ErrorMessage {
   payload: Error;
-  type?: Type14;
-  v?: V12;
+  type?: Type15;
+  v?: V13;
 }
 export interface Error {
   code: Code;
   fatal: Fatal;
   message: Message;
+}
+export interface ReplayInfoMessage {
+  payload: ReplayInfo;
+  type?: Type16;
+  v?: V14;
+}
+/**
+ * Brackets a ghost: sent before its first frame (`done` false) and after its last.
+ */
+export interface ReplayInfo {
+  born_tick: BornTick;
+  causes: Causes1;
+  died_tick: DiedTick;
+  done: Done;
+  lifespan: Lifespan1;
+  lineage: Lineage4;
+  name: Name4;
+  owner: Owner5;
+  speed: Speed1;
 }

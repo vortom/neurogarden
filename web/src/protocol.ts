@@ -10,7 +10,13 @@ export const SERVER_TYPES = new Set([
   "frame",
   "chronicle",
   "error",
+  "replay",
 ]);
+
+/** What the server accepts as a replay speed (multiples of the world's own pace). */
+export const REPLAY_SPEED = 4;
+export const REPLAY_SPEED_MIN = 0.25;
+export const REPLAY_SPEED_MAX = 64;
 
 export function encode(message: ClientMessage): string {
   return JSON.stringify(message);
@@ -49,6 +55,10 @@ export function say(text: string): ClientMessage {
 
 export function leave(): ClientMessage {
   return { v: 1, type: "leave", payload: {} };
+}
+
+export function replay(owner: string, lineage: number, speed = REPLAY_SPEED): ClientMessage {
+  return { v: 1, type: "replay", payload: { owner, lineage, speed } };
 }
 
 /** A server message, or null for anything this client does not understand. */
