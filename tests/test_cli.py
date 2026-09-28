@@ -121,6 +121,7 @@ def test_the_banner_offers_no_page_when_no_bundle_was_built(capsys, monkeypatch)
         config = ServerConfig(map="drosoville", seed=0, port=8765, web=True)
         port = 8765
         url = "ws://127.0.0.1:8765"
+        resumed = False
 
     cli.banner(FakeServer())
     out = capsys.readouterr().out
@@ -180,5 +181,127 @@ def test_serve_refuses_a_port_that_is_already_taken(capsys):
         taken.bind(("127.0.0.1", 0))
         taken.listen()
         port = taken.getsockname()[1]
-        assert cli.main(["serve", "--port", str(port), "--npc", "none"]) == 1
+        argv = ["serve", "--port", str(port), "--npc", "none", "--archive", ":memory:"]
+        assert cli.main(argv) == 1
     assert "address already in use" in capsys.readouterr().err
+
+
+# --- the archive commands ---------------------------------------------------------------------
+
+
+@pytest.fixture
+def garden(tmp_path):
+    """An archive with one short, finished life of alice's, and the npc still going."""
+    import numpy as np  # noqa: F401  (the export test needs numpy; keep the import local)
+
+    from neurogarden.engine import Config
+
+    path = str(tmp_path / "garden.db")
+    config = ServerConfig(
+        port=0,
+        tps=50.0,
+        npcs=[("scripted", 1)],
+        hello_timeout=1.0,
+        seed=3,
+        config=Config(initial_satiety=8, initial_health=5),
+        archive=path,
+    )
+
+    async def scenario():
+        async with Server(config) as server:
+            argv = ["join", "--brain", "random", "--owner", "alice", "--url", server.url]
+            await asyncio.to_thread(cli.main, [*argv, "--lives", "1"])
+        return server.runner.world.tick
+
+    ticks = asyncio.run(scenario())
+    return path, ticks
+
+
+def test_lives_prints_the_hall_of_flies(garden, capsys):
+    path, _ = garden
+    assert cli.main(["lives", "--archive", path]) == 0
+    out = capsys.readouterr().out
+    assert "drosoville (seed 3)" in out and "2 lives" in out
+    assert "alice" in out and "npc-scripted-1" in out and "starvation / 0 / 0" in out
+    assert cli.main(["lives", "--archive", path, "--owner", "alice"]) == 0
+    rows = [line for line in capsys.readouterr().out.splitlines() if line.startswith("alice")]
+    assert len(rows) == 1 and " 1 " in rows[0]
+
+
+def test_lives_marks_a_fly_that_is_still_going(tmp_path, capsys):
+    from neurogarden.engine import World, maps
+    from neurogarden.server import Archive, WorldRunner
+    from test_runner import joined_agent
+
+    path = str(tmp_path / "live.db")
+    runner = WorldRunner(World.from_map(maps.load("drosoville")), archive=Archive.open(path))
+    joined_agent(runner, "carol")
+    for _ in range(4):
+        runner.tick()
+    runner.archive.close()
+    assert cli.main(["lives", "--archive", path]) == 0
+    out = capsys.readouterr().out
+    assert "1 lives" in out and "still alive" in out and "5*" in out
+
+
+def test_replay_shows_a_life_frame_by_frame(garden, capsys):
+    path, _ = garden
+    argv = ["replay", "--archive", path, "--owner", "alice", "--life", "1", "--ascii"]
+    assert cli.main([*argv, "--frames", "3", "--fps", "1000"]) == 0
+    out = capsys.readouterr().out
+    assert out.count("ghost: alice's") == 3 and "tick 1 of" in out or "tick 0 of" in out
+    assert cli.main([*argv, "--fps", "1000"]) == 0  # the whole life, to its last frame
+    assert "dies of starvation" in capsys.readouterr().out
+    assert cli.main(["replay", "--archive", path, "--owner", "alice", "--life", "7"]) == 1
+    assert "no life #7" in capsys.readouterr().err
+
+
+def test_export_writes_observation_action_pairs(garden, tmp_path, capsys):
+    import numpy as np
+
+    path, _ = garden
+    out = str(tmp_path / "alice-1.npz")
+    argv = ["export", "--archive", path, "--owner", "alice", "--life", "1", "--out", out]
+    assert cli.main(argv) == 0
+    assert "wrote" in capsys.readouterr().out
+    with np.load(out) as data:
+        meta = json.loads(str(data["meta"]))
+        steps = len(data["actions"])
+        assert meta["owner"] == "alice" and meta["causes"] == ["starvation"]
+        lifespan = meta["died_tick"] - meta["born_tick"] + 1
+        assert steps == lifespan - 1  # the hatching idle and the final observation are left out
+        assert data["ticks"][0] == meta["born_tick"] and data["ticks"][-1] == meta["died_tick"] - 1
+        assert data["vision"].shape[0] == steps and data["body"].shape == (steps, 5)
+        assert data["body"][0][4] == 1  # age 1 after the hatching tick
+        assert list(meta["catalog"]["actions"])[0] == "idle"
+
+
+def test_verify_checks_the_whole_history(garden, capsys):
+    path, _ = garden
+    assert cli.main(["verify", "--archive", path]) == 0
+    assert capsys.readouterr().out.startswith("ok:")
+    assert cli.main(["verify", "--archive", path + ".missing"]) == 1
+    assert "no archive" in capsys.readouterr().err
+
+
+def test_serve_resumes_an_archive_and_refuses_another_seed(garden, capsys, monkeypatch):
+    path, ticks = garden
+    seen = []
+
+    def announce(server):
+        cli.banner(server)
+        seen.append((server.resumed, server.runner.world.tick))
+        server.stop.set()  # one banner is all this test wants
+
+    async def stopping_serve(config, on_ready=None):
+        await serve(config, on_ready=announce)
+
+    monkeypatch.setattr(cli, "serve", stopping_serve)
+    # no --map/--seed: the CLI takes them from the archive and resumes
+    assert cli.main(["serve", "--archive", path, "--port", "0", "--npc", "none"]) == 0
+    assert cli.main(["serve", "--archive", path, "--port", "0", "--seed", "9"]) == 1
+    out, err = capsys.readouterr()
+    assert seen == [(True, ticks)]
+    assert "drosoville (seed 3)" in out and f"resumed at tick {ticks}" in out
+    assert "2 lives so far" in out and f"archive: {path}" in out
+    assert "seed 3), not drosoville (seed 9)" in err
