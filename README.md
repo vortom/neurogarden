@@ -119,7 +119,7 @@ Breed your own, and carry on from the shipped weights or from scratch:
 ```bash
 uv run neurogarden evolve --out mine.npz --generations 40          # minutes on a laptop
 uv run neurogarden evolve --out mine.npz --start src/neurogarden/brains/weights/evolved-v1.npz --max-steps 6000
-uv run neurogarden join --owner you --brain evolved --weights mine.npz
+uv run neurogarden join --owner you --weights mine.npz               # --weights means the evolved brain
 ```
 
 Fitness is `forager` by default: `lifespan × (1 + mean wellbeing)` plus a

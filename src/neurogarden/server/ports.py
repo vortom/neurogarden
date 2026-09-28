@@ -13,7 +13,7 @@ from typing import Any, Protocol
 
 from websockets.exceptions import ConnectionClosed
 
-from neurogarden.brains.base import THOUGHT_EVERY, Brain, brain_seed, think
+from neurogarden.brains.base import Brain, Mouth, brain_seed
 from neurogarden.protocol.codec import decode_channels
 from neurogarden.protocol.mailbox import Mailbox
 from neurogarden.protocol.messages import BodyInfo, encode
@@ -87,6 +87,7 @@ class LocalPort:
         self.body = body
         self.rejoin = rejoin
         self.lives = 0
+        self._mouth = Mouth(brain)
 
     def deliver(self, message) -> None:
         if message.type == "joined":
@@ -100,10 +101,9 @@ class LocalPort:
                 log.exception("hosted brain of %s failed to act; idling this tick", self.owner)
                 return
             self.runner.submit_action(self, message.payload.tick, action)
-            if message.payload.tick % THOUGHT_EVERY == 0:
-                thought = think(self.brain)
-                if thought is not None:
-                    self.runner.say(self, thought)
+            thought = self._mouth.speak(message.payload.tick)
+            if thought is not None:
+                self.runner.say(self, thought)
         elif message.type == "died" and self.rejoin:
             self.runner.request_join(self)
 

@@ -23,7 +23,9 @@ class TinyObservation(gymnasium.ObservationWrapper):
     def __init__(self, env: gymnasium.Env, include_vision: bool = False) -> None:
         super().__init__(env)
         self._include_vision = include_vision
-        self._age_scale = env.unwrapped.config.max_age or DEFAULT_AGE_SCALE
+        # The same scale as the brain uses in the garden, whatever max_age an env sets:
+        # a policy must see the same numbers in training and in life.
+        self._age_scale = DEFAULT_AGE_SCALE
         size = TINY_SIZE
         if include_vision:
             size += VISION_SIZE * VISION_SIZE * sum(_VISION_CLASSES)

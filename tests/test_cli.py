@@ -222,7 +222,8 @@ def test_lives_prints_the_hall_of_flies(garden, capsys):
     path, _ = garden
     assert cli.main(["lives", "--archive", path]) == 0
     out = capsys.readouterr().out
-    assert "drosoville (seed 3)" in out and re.search(r" [2-9] lives", out)  # the npc may rejoin
+    lives = int(re.search(r"(\d+) lives", out).group(1))
+    assert "drosoville (seed 3)" in out and lives >= 2  # the npc may have rejoined a few times
     assert "alice" in out and "npc-scripted-1" in out and "starvation / 0 / 0" in out
     assert cli.main(["lives", "--archive", path, "--owner", "alice"]) == 0
     rows = [line for line in capsys.readouterr().out.splitlines() if line.startswith("alice")]
@@ -375,5 +376,35 @@ def test_evolve_writes_weights_that_join_can_fly(tmp_path, capsys):
     assert "eve's" in capsys.readouterr().out
     assert cli.main(["join", "--brain", "random", "--weights", out, "--owner", "x"]) == 1
     assert "for --brain evolved" in capsys.readouterr().err
+    assert cli.main(["join", "--weights", str(tmp_path / "nope.npz"), "--owner", "x"]) == 1
+    assert "No such file" in capsys.readouterr().err  # --weights alone means evolved
+    again = str(tmp_path / "again.npz")
+    assert (
+        cli.main(
+            [
+                "evolve",
+                "--start",
+                again,
+                "--out",
+                out,
+                "--generations",
+                "1",
+                "--population",
+                "2",
+                "--episodes",
+                "1",
+                "--max-steps",
+                "20",
+                "--workers",
+                "1",
+            ]
+        )
+        == 0
+    )
+    assert "evolving a 3-neuron brain" in capsys.readouterr().out  # inherited from --start
+    assert (
+        cli.main(["evolve", "--start", again, "--out", out, "--hidden", "5", "--workers", "1"]) == 1
+    )
+    assert "hidden neurons" in capsys.readouterr().err
     assert cli.main(["evolve", "--out", out, "--population", "3", "--workers", "1"]) == 1
     assert "even" in capsys.readouterr().err

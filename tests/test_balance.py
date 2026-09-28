@@ -50,4 +50,5 @@ def test_the_evolved_brain_outlives_the_random_one():
     evolved = statistics.median(lifespans(EvolvedBrain))
     random = statistics.median(lifespans(RandomBrain))
     print(f"\nmedian lifespan: evolved {evolved}, random {random}")
+    assert evolved >= 4000, "the shipped weights should live most of a long life"
     assert evolved >= 2 * random, "evolution should at least double a random brain's life"

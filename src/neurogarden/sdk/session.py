@@ -6,7 +6,7 @@ import asyncio
 import threading
 from collections.abc import Iterator
 
-from neurogarden.brains.base import THOUGHT_EVERY, Brain, brain_seed, think
+from neurogarden.brains.base import Brain, Mouth, brain_seed
 from neurogarden.dojo.stats import EpisodeStats
 from neurogarden.protocol.messages import Died, Joined, Welcome
 
@@ -122,14 +122,15 @@ def run_brain(
     Returns the stats of every completed life; a lost connection raises ConnectionLost.
     """
     finished: list[EpisodeStats] = []
+    mouth = Mouth(brain)  # a brain with thoughts shows them, like a hosted one
     with Session(url, owner=owner, token=token) as session:
         while lives is None or len(finished) < lives:
             fly = session.join()
             brain.reset(brain_seed(fly.lineage))
             for observation in fly.observations():
                 fly.act(observation.tick, int(brain.act(observation.channels)))
-                if observation.tick % THOUGHT_EVERY == 0 and (thought := think(brain)):
-                    fly.say(thought)  # a brain with thoughts shows them, like a hosted one
+                if (thought := mouth.speak(observation.tick)) is not None:
+                    fly.say(thought)
             finished.append(fly.stats)
             if on_life is not None:
                 on_life(fly)

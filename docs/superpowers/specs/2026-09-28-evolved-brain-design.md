@@ -38,7 +38,7 @@ the scripted brain uses it only to avoid walls, and bumping is a cost evolution
 can feel. `TinyObservation` now wraps this same function, so what a network sees
 in training is byte-for-byte what it sees in the garden.
 
-`Genome`: `w1 (25×H)`, `b1 (H)`, `w2 (H×7)`, `b2 (7)`, H = 16 by default (551
+`Genome`: `w1 (25×H)`, `b1 (H)`, `w2 (H×7)`, `b2 (7)`, H = 16 by default (535
 weights). `hidden = tanh(x·w1 + b1)`, `scores = hidden·w2 + b2`. Saved as an
 `.npz` with the four arrays and a `meta` JSON string (features version, hidden
 size, how it was evolved).
@@ -86,13 +86,17 @@ config)`; `Evolved.meta` is what goes into the file.
 ```text
 neurogarden evolve --out brain.npz [--generations N] [--population N] [--episodes N]
                    [--max-steps N] [--sigma X] [--learning-rate X] [--hidden N]
-                   [--fitness lifespan|wellbeing] [--seed N] [--workers N] [--start FILE.npz]
-neurogarden join --brain evolved [--weights FILE.npz]
+                   [--fitness lifespan|wellbeing|forager] [--temperature X] [--seed N]
+                   [--workers N] [--map M] [--start FILE.npz]
+neurogarden join --brain evolved [--weights FILE.npz]     # --weights alone means evolved
 neurogarden serve --npc evolved:1 --npc scripted:1 --npc random:1
 ```
 
 `evolve` prints one line per generation (best, mean, centre fitness, seconds)
-and writes the weights at the end; Ctrl-C writes nothing.
+and writes the weights at the end; Ctrl-C writes nothing. `--start` carries on
+from a file and inherits its hidden size, fitness and temperature unless told
+otherwise; the file written records its whole ancestry (`meta.parent`,
+`meta.total_generations`).
 
 ## 6. Testing
 
@@ -131,7 +135,20 @@ What the probes taught, in order:
    from a second stage at 6000-tick lives on top of it.
 
 Deviations from sections 3–5: the default fitness is `forager`, not
-`wellbeing`; `--temperature` is a CLI option; `EvolveConfig.init_scale` exists
-(starting weights at `scale/√fan-in`); the strategy's per-generation seeds
-come from the config seed, so a run is reproducible only with the same
+`wellbeing`; `--temperature` and `--map` are CLI options; `EvolveConfig.init_scale`
+exists (starting weights at `scale/√fan-in`); the strategy's per-generation
+seeds come from the config seed, so a run is reproducible only with the same
 population and episode counts (workers do not matter).
+
+From the reviews: ranks are averaged over ties, so a mirrored pair that scored
+the same pulls nowhere (before, the `+ε` twin always ranked below the `−ε`
+twin and every dead-at-the-wall pair pushed a full step); `think()` strips
+control characters, since a `say` with one is a protocol violation; a brain's
+thought is said when it changes or every 100 ticks (`brains.base.Mouth`), not
+every fifth tick; `Genome.load` checks every array's shape and turns any
+malformed file into a `ValueError`; the shipped weights are read as a package
+resource, so a zipped install works; `TinyObservation` scales age by the same
+constant the brain uses, whatever `max_age` an env sets; `evolve` refuses an
+unwritable `--out` before the first generation, and `Genome.save` returns the
+path it really wrote (`.npz` appended); the balance guard also asserts an
+absolute floor (median ≥ 4000).

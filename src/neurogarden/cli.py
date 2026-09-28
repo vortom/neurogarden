@@ -11,6 +11,7 @@ import logging
 import sys
 import time
 from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
 
@@ -81,7 +82,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     join_cmd = commands.add_parser("join", help="connect a brain to a live world")
-    join_cmd.add_argument("--brain", choices=sorted(BRAINS), default="scripted")
+    join_cmd.add_argument(
+        "--brain",
+        choices=sorted(BRAINS),
+        default=None,
+        help="default scripted; evolved with --weights",
+    )
     join_cmd.add_argument("--owner", required=True)
     join_cmd.add_argument("--seed", type=int, default=0)
     join_cmd.add_argument("--lives", type=int, default=None, help="stop after N lives")
@@ -107,15 +113,21 @@ def build_parser() -> argparse.ArgumentParser:
     evolve_cmd.add_argument("--max-steps", type=int, default=EvolveConfig.max_steps)
     evolve_cmd.add_argument("--sigma", type=float, default=EvolveConfig.sigma)
     evolve_cmd.add_argument("--learning-rate", type=float, default=EvolveConfig.learning_rate)
-    evolve_cmd.add_argument("--hidden", type=int, default=EvolveConfig.hidden)
-    evolve_cmd.add_argument("--fitness", choices=sorted(FITNESSES), default=EvolveConfig.fitness)
+    evolve_cmd.add_argument(
+        "--hidden", type=int, default=None, help=f"neurons (default {EvolveConfig.hidden})"
+    )
+    evolve_cmd.add_argument(
+        "--fitness", choices=sorted(FITNESSES), default=None, help=f"default {EvolveConfig.fitness}"
+    )
     evolve_cmd.add_argument(
         "--temperature",
         type=float,
-        default=EvolveConfig.temperature,
-        help="softmax temperature the brains act at; 0 = always the highest score",
+        default=None,
+        help=f"softmax temperature the brains act at; 0 = always the highest score "
+        f"(default {EvolveConfig.temperature})",
     )
     evolve_cmd.add_argument("--seed", type=int, default=EvolveConfig.seed)
+    evolve_cmd.add_argument("--map", default=EvolveConfig.map, help="the world to breed in")
     evolve_cmd.add_argument(
         "--workers", type=int, default=None, help="evaluation processes (default: all cores)"
     )
@@ -191,11 +203,12 @@ def cmd_serve(args) -> int:
 
 
 def _make_brain(args):
+    kind = args.brain or ("evolved" if args.weights is not None else "scripted")
     if args.weights is not None:
-        if args.brain != "evolved":
+        if kind != "evolved":
             raise ValueError("--weights is for --brain evolved")
         return EvolvedBrain(seed=args.seed, path=args.weights)
-    return BRAINS[args.brain](seed=args.seed)
+    return BRAINS[kind](seed=args.seed)
 
 
 def cmd_join(args) -> int:
@@ -467,20 +480,32 @@ def cmd_verify(args) -> int:
 
 def cmd_evolve(args) -> int:
     try:
+        start = parent = None
+        if args.start is not None:
+            start, parent = Genome.load(args.start)
+        # Carrying on from weights keeps their shape and settings unless told otherwise.
+        inherited = parent or {}
         config = EvolveConfig(
             generations=args.generations,
             population=args.population,
             sigma=args.sigma,
             learning_rate=args.learning_rate,
-            hidden=args.hidden,
+            hidden=args.hidden or inherited.get("hidden") or EvolveConfig.hidden,
             episodes=args.episodes,
             max_steps=args.max_steps,
             seed=args.seed,
             workers=args.workers,
-            fitness=args.fitness,
-            temperature=args.temperature,
+            map=args.map,
+            fitness=args.fitness or inherited.get("fitness") or EvolveConfig.fitness,
+            temperature=(
+                args.temperature
+                if args.temperature is not None
+                else inherited.get("temperature", EvolveConfig.temperature)
+            ),
         )
-        start = Genome.load(args.start)[0] if args.start is not None else None
+        out_dir = Path(args.out).resolve().parent
+        if not out_dir.is_dir():  # found out now, not after the last generation
+            raise ValueError(f"cannot write to {out_dir}: no such directory")
     except (ValueError, OSError) as err:
         return _refuse(err)
 
@@ -498,15 +523,14 @@ def cmd_evolve(args) -> int:
         f"fitness {config.fitness}, temperature {config.temperature}"
     )
     try:
-        result = evolve(config, start=start, on_generation=report)
+        result = evolve(config, start=start, on_generation=report, parent=parent)
+        written = result.genome.save(args.out, result.meta)
     except KeyboardInterrupt:
         print("stopped; nothing written", file=sys.stderr)
         return 1
-    try:
-        result.genome.save(args.out, result.meta)
-    except OSError as err:
+    except (ValueError, OSError) as err:
         return _refuse(err)
-    print(f"wrote {args.out}")
+    print(f"wrote {written}")
     return 0
 
 

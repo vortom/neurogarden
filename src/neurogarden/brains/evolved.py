@@ -67,22 +67,54 @@ class Genome:
             at += part.size
         return Genome(*out)
 
-    def save(self, path: str | Path, meta: dict | None = None) -> None:
-        """An .npz with the four arrays and a `meta` JSON string (how it came to be)."""
+    def save(self, path: str | Path, meta: dict | None = None) -> Path:
+        """An .npz with the four arrays and a `meta` JSON string (how it came to be).
+
+        numpy appends `.npz` to a name without it; the path written is returned, so nobody
+        is told a file exists under a name it does not.
+        """
+        path = Path(path)
+        if path.suffix != ".npz":
+            path = path.with_name(path.name + ".npz")
         stamp = {"features_version": FEATURES_VERSION, "hidden": self.hidden, **(meta or {})}
         np.savez(path, w1=self.w1, b1=self.b1, w2=self.w2, b2=self.b2, meta=json.dumps(stamp))
+        return path
 
     @classmethod
-    def load(cls, path: str | Path) -> tuple[Genome, dict]:
-        with np.load(path) as data:
-            meta = json.loads(str(data["meta"])) if "meta" in data else {}
-            genome = cls(*(data[name].astype(np.float32) for name in ("w1", "b1", "w2", "b2")))
-        if genome.w1.shape[0] != TINY_SIZE:
-            raise ValueError(
-                f"{path}: weights expect {genome.w1.shape[0]} features, not {TINY_SIZE}"
-            )
+    def load(cls, source) -> tuple[Genome, dict]:
+        """From a path, or anything with `open("rb")` (a packaged resource). ValueError for
+        a file that is not a brain of this shape."""
+        name = getattr(source, "name", None) or str(source)
+        try:
+            if hasattr(source, "open") and not isinstance(source, Path):
+                with source.open("rb") as handle, np.load(handle) as data:
+                    genome, meta = cls._unpack(data, name)
+            else:
+                with np.load(source) as data:
+                    genome, meta = cls._unpack(data, name)
+        except (KeyError, ValueError, TypeError, OSError) as err:
+            if isinstance(err, FileNotFoundError):
+                raise
+            raise ValueError(f"{name}: not an evolved brain's weights ({err})") from None
         if meta.get("features_version", FEATURES_VERSION) != FEATURES_VERSION:
-            raise ValueError(f"{path}: features_version {meta['features_version']} is not ours")
+            raise ValueError(f"{name}: features_version {meta['features_version']} is not ours")
+        return genome, meta
+
+    @classmethod
+    def _unpack(cls, data, name: str) -> tuple[Genome, dict]:
+        meta = json.loads(str(data["meta"])) if "meta" in data else {}
+        if not isinstance(meta, dict):
+            raise ValueError("meta is not an object")
+        genome = cls(
+            *(np.asarray(data[part], dtype=np.float32) for part in ("w1", "b1", "w2", "b2"))
+        )
+        hidden = genome.w1.shape[1] if genome.w1.ndim == 2 else -1
+        expected = Genome.zeros(max(hidden, 1))
+        for part, shape in zip(genome.parts(), expected.parts(), strict=True):
+            if part.shape != shape.shape:
+                raise ValueError(f"a {part.shape} array where {shape.shape} was expected")
+        if meta.get("hidden", hidden) != hidden:
+            raise ValueError(f"meta says {meta['hidden']} hidden neurons, the arrays {hidden}")
         return genome, meta
 
 
@@ -90,13 +122,19 @@ def hidden_activation(genome: Genome, features: np.ndarray) -> np.ndarray:
     return np.tanh(features @ genome.w1 + genome.b1)
 
 
+def output_scores(genome: Genome, hidden: np.ndarray) -> np.ndarray:
+    """One score per action from the hidden layer; the policy acts on these."""
+    return hidden @ genome.w2 + genome.b2
+
+
 def scores(genome: Genome, features: np.ndarray) -> np.ndarray:
-    """One score per action; the policy takes the highest."""
-    return hidden_activation(genome, features) @ genome.w2 + genome.b2
+    """One score per action from what is seen: the whole network in one call."""
+    return output_scores(genome, hidden_activation(genome, features))
 
 
-def default_weights_path() -> Path:
-    return Path(str(resources.files("neurogarden.brains").joinpath("weights", DEFAULT_WEIGHTS)))
+def default_weights():
+    """The shipped weights as a packaged resource: readable wherever the package lives."""
+    return resources.files("neurogarden.brains").joinpath("weights", DEFAULT_WEIGHTS)
 
 
 def softmax(values: np.ndarray) -> np.ndarray:
@@ -123,23 +161,20 @@ class EvolvedBrain:
         if genome is not None:
             self.genome, self.meta = genome, {}
         else:
-            self.genome, self.meta = Genome.load(
-                path if path is not None else default_weights_path()
-            )
+            self.genome, self.meta = Genome.load(path if path is not None else default_weights())
         if temperature is None:
             temperature = float(self.meta.get("temperature") or 0.0)
         self.temperature = temperature
-        self._hidden = np.zeros(self.genome.hidden, np.float32)
         self.reset()
 
     def reset(self, seed: int | None = None) -> None:
         self._rng = SplitMix64(self._seed if seed is None else seed)
-        self._hidden[:] = 0
+        self._hidden = np.zeros(self.genome.hidden, np.float32)
 
     def act(self, observation: dict[str, np.ndarray]) -> int:
         features = tiny_features(observation, DEFAULT_AGE_SCALE)
         self._hidden = hidden_activation(self.genome, features)
-        values = self._hidden @ self.genome.w2 + self.genome.b2
+        values = output_scores(self.genome, self._hidden)
         if self.temperature <= 0:
             return int(np.argmax(values))
         draw = self._rng.next_u64() / 2**64  # the brain's own stream: reproducible per seed

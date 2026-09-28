@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 import numpy as np
 
@@ -22,7 +22,9 @@ from neurogarden.brains.evolved import DEFAULT_HIDDEN, EvolvedBrain, Genome
 from neurogarden.dojo.env import NeuroGardenEnv
 from neurogarden.dojo.features import TINY_SIZE
 from neurogarden.dojo.stats import FITNESSES, EpisodeStats, fitness_lifespan
+from neurogarden.engine import maps
 from neurogarden.engine.config import Config
+from neurogarden.engine.tiles import parse_map
 
 Fitness = Callable[[EpisodeStats], float]
 
@@ -46,10 +48,16 @@ class EvolveConfig:
     def __post_init__(self) -> None:
         if self.population < 2 or self.population % 2:
             raise ValueError("population must be an even number of at least 2")
-        if self.generations < 0 or self.episodes < 1 or self.max_steps < 1:
-            raise ValueError("generations, episodes and max_steps must be positive")
-        if self.sigma <= 0 or self.learning_rate <= 0:
-            raise ValueError("sigma and learning_rate must be positive")
+        if min(self.generations, self.episodes, self.max_steps, self.hidden) < 1:
+            raise ValueError("generations, episodes, max_steps and hidden must be positive")
+        if self.sigma <= 0 or self.learning_rate <= 0 or self.init_scale <= 0:
+            raise ValueError("sigma, learning_rate and init_scale must be positive")
+        if self.workers is not None and self.workers < 0:
+            raise ValueError("workers must be None (all cores), 0 or 1 (in-process), or more")
+        if self.map not in maps.available():
+            parse_map(
+                self.map
+            )  # raw map text is fine; anything else is refused here, not in a worker
         if self.fitness not in FITNESSES:
             raise ValueError(f"unknown fitness {self.fitness!r}; choose from {sorted(FITNESSES)}")
         if self.temperature < 0:
@@ -65,26 +73,33 @@ class Generation:
     seconds: float
 
 
+_META_FIELDS = (
+    "population", "sigma", "learning_rate", "episodes", "max_steps", "seed", "fitness",
+    "temperature", "init_scale", "map",
+)  # fmt: skip
+
+
 @dataclass
 class Evolved:
     genome: Genome
+    config: EvolveConfig
     history: list[Generation] = field(default_factory=list)
-    config: EvolveConfig | None = None
+    parent: dict | None = None  # the meta of the weights this run carried on from
 
     @property
     def meta(self) -> dict:
+        """What goes into the file: how these weights came to be, ancestors included."""
         last = self.history[-1] if self.history else None
+        settings = asdict(self.config)
+        inherited = 0 if self.parent is None else int(self.parent.get("total_generations", 0))
         return {
             "generations": len(self.history),
-            "population": self.config.population if self.config else None,
-            "sigma": self.config.sigma if self.config else None,
-            "learning_rate": self.config.learning_rate if self.config else None,
-            "episodes": self.config.episodes if self.config else None,
-            "max_steps": self.config.max_steps if self.config else None,
-            "seed": self.config.seed if self.config else None,
-            "fitness": self.config.fitness if self.config else None,
-            "temperature": self.config.temperature if self.config else None,
-            "final_centre_fitness": None if last is None else last.centre,
+            "total_generations": inherited + len(self.history),
+            **{name: settings[name] for name in _META_FIELDS},
+            # the centre as it was evaluated in the last generation, one step before these
+            # weights: the saved weights themselves are never evaluated
+            "last_centre_fitness": None if last is None else last.centre,
+            "parent": self.parent,
         }
 
 
@@ -131,12 +146,20 @@ def _evaluate(task: tuple[np.ndarray, tuple[int, ...]]) -> float:
 def _rank_normalise(values: np.ndarray) -> np.ndarray:
     """Ranks mapped to [-0.5, 0.5]: the update cares who lived better, not by how much.
 
-    A generation where everyone scored the same has nothing to say: all zeros, no step.
+    Ties share the average of their ranks, so a mirrored pair that scored the same pulls
+    nowhere; a generation where everyone scored the same steps nowhere at all.
     """
     if values.max() == values.min():
         return np.zeros(len(values), np.float32)
+    order = np.argsort(values, kind="stable")
     ranks = np.empty(len(values), np.float32)
-    ranks[np.argsort(values, kind="stable")] = np.arange(len(values), dtype=np.float32)
+    at = 0
+    while at < len(order):
+        end = at
+        while end + 1 < len(order) and values[order[end + 1]] == values[order[at]]:
+            end += 1
+        ranks[order[at : end + 1]] = (at + end) / 2  # the average rank of the tied run
+        at = end + 1
     return ranks / (len(values) - 1) - 0.5
 
 
@@ -158,15 +181,21 @@ def evolve(
     config: EvolveConfig | None = None,
     start: Genome | None = None,
     on_generation: Callable[[Generation], None] | None = None,
+    parent: dict | None = None,
 ) -> Evolved:
-    """Run the strategy; returns the weights at the centre after the last generation."""
+    """Run the strategy; returns the weights at the centre after the last generation.
+
+    `start` carries on from earlier weights (`parent` is their meta, kept in the file).
+    """
     config = config if config is not None else EvolveConfig()
     rng = np.random.default_rng(config.seed)
     shape = Genome.zeros(config.hidden)
     if start is None:  # all-zero weights would idle every fly to death: start somewhere
         start = initial_genome(config.hidden, rng, config.init_scale)
+    elif start.hidden != config.hidden:
+        raise ValueError(f"the start has {start.hidden} hidden neurons, the config {config.hidden}")
     theta = start.to_vector()
-    result = Evolved(shape.with_vector(theta), config=config)
+    result = Evolved(shape.with_vector(theta), config=config, parent=parent)
     half = config.population // 2
 
     def run(evaluate) -> None:
@@ -177,16 +206,16 @@ def evolve(
             epsilon = rng.standard_normal((half, theta.size)).astype(np.float32)
             epsilon = np.concatenate([epsilon, -epsilon])  # mirrored: less noise per pair
             candidates = [(theta + config.sigma * e, seeds) for e in epsilon]
-            fitness = np.array(list(evaluate([*candidates, (theta, seeds)])), np.float32)
-            centre, fitness = float(fitness[-1]), fitness[:-1]
-            weights = _rank_normalise(fitness)
+            scored = np.array(list(evaluate([*candidates, (theta, seeds)])), np.float32)
+            centre, scored = float(scored[-1]), scored[:-1]
+            weights = _rank_normalise(scored)
             gradient = (weights @ epsilon) / (config.population * config.sigma)
             theta = (theta + config.learning_rate * gradient).astype(np.float32)
             result.genome = shape.with_vector(theta)
             generation = Generation(
                 index=index,
-                best=float(fitness.max()),
-                mean=float(fitness.mean()),
+                best=float(scored.max()),
+                mean=float(scored.mean()),
                 centre=centre,
                 seconds=time.perf_counter() - started,
             )
