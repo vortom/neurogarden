@@ -14,12 +14,14 @@ The first world is **Drosoville**.
 
 ## Status
 
-Sub-projects 1–4 of 5: the simulation **engine**, the training **dojo**, the
+All five sub-projects: the simulation **engine**, the training **dojo**, the
 **live world** — a server, a wire protocol and a Python SDK, so several brains
 can live in one Drosoville at the same time — the **browser client**, a
-pixel-art view of the garden you can also play in, and the **archive**: a world
+pixel-art view of the garden you can also play in, the **archive**: a world
 that survives its process, and lives that can be watched again as ghosts or
-exported as datasets. See `docs/superpowers/specs/`.
+exported as datasets, and the **first learned brain**: a tiny network evolved
+in the dojo, living in the garden with its neurons showing. See
+`docs/superpowers/specs/`.
 
 ## Quick start: a live garden
 
@@ -90,10 +92,49 @@ what every number in an observation means and what every event carries. The
 protocol grows by addition: a client ignores fields it does not know, so a
 newer server never breaks an older brain.
 
+## The evolved brain
+
+Nobody wrote this one. `EvolvedBrain` is a 25-in, 16-hidden, 7-out network —
+535 numbers — whose weights were found by evolution in the dojo: perturb,
+live a few lives, keep what lived better (`neurogarden.dojo.evolve`, a plain
+evolution strategy in numpy). It ships with the package, so it can live in
+your garden right away, beside the hand-written survivor and the random
+baseline:
+
+```bash
+uv run neurogarden serve --npc evolved:1 --npc scripted:1 --npc random:1
+uv run neurogarden join --owner you --brain evolved      # or fly it yourself
+```
+
+How good is it? The balance guard (`uv run pytest -m slow`) runs 20 lives of
+up to 6000 ticks per brain: median lifespan **5865** for the evolved brain,
+6000 for the hand-written survivor, 899 for the random baseline.
+
+Its speech bubble is its hidden layer, one glyph per neuron (`▁▂▃▄▅▆▇█`): a
+brain scope you can watch fire as it smells fruit. Any brain with a
+`thought()` method gets the same bubble, hosted or over the SDK.
+
+Breed your own, and carry on from the shipped weights or from scratch:
+
+```bash
+uv run neurogarden evolve --out mine.npz --generations 40          # minutes on a laptop
+uv run neurogarden evolve --out mine.npz --start src/neurogarden/brains/weights/evolved-v1.npz --max-steps 6000
+uv run neurogarden join --owner you --weights mine.npz               # --weights means the evolved brain
+```
+
+Fitness is `forager` by default: `lifespan × (1 + mean wellbeing)` plus a
+bounty per bite (`--fitness wellbeing` without the bounty, `--fitness
+lifespan` for the bare public score). Plain lifespan has no slope until a fly
+eats; wellbeing alone breeds a fly that drinks, rests and starves at tick 899
+— the bounty is what pulled evolution past that wall. The brain acts by
+drawing from the softmax of its scores at the temperature it was evolved at (a
+policy that always does the same thing gives evolution nothing to rank), with
+its own seeded generator, so a life is reproducible.
+
 ## Quick start: the dojo
 
 ```bash
-uv run python -m neurogarden.dojo.watch --brain scripted
+uv run python -m neurogarden.dojo.watch --brain scripted     # or evolved, or random
 ```
 
 Train against it like any Gymnasium environment:

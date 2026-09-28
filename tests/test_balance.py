@@ -40,3 +40,15 @@ def test_benchmark_steps_per_second_is_reported():
             observation, _ = env.reset(seed=1)
     rate = steps / (time.perf_counter() - start)
     print(f"\n{rate:,.0f} steps per second (design target: 2,000; reported, not asserted)")
+
+
+@pytest.mark.slow
+def test_the_evolved_brain_outlives_the_random_one():
+    """The shipped weights must be worth shipping: a learned fly, not a lucky one."""
+    from neurogarden.brains import EvolvedBrain
+
+    evolved = statistics.median(lifespans(EvolvedBrain))
+    random = statistics.median(lifespans(RandomBrain))
+    print(f"\nmedian lifespan: evolved {evolved}, random {random}")
+    assert evolved >= 4000, "the shipped weights should live most of a long life"
+    assert evolved >= 2 * random, "evolution should at least double a random brain's life"

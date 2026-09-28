@@ -88,5 +88,25 @@ class StatsTracker:
 
 
 def fitness_lifespan(stats: EpisodeStats) -> float:
-    """Default fitness for evolution: how long the fly lived."""
+    """The public score as fitness: how long the fly lived."""
     return float(stats.lifespan)
+
+
+def fitness_wellbeing(stats: EpisodeStats) -> float:
+    """Lifespan weighted by how well the fly lived: a fly that eats and drinks scores more
+    than one that merely lasts as long, so evolution has a slope to climb before the first
+    extra tick of life is won. Still zero for a fly that never lived."""
+    return float(stats.lifespan) * (1.0 + stats.mean_wellbeing)
+
+
+def fitness_forager(stats: EpisodeStats) -> float:
+    """Wellbeing plus a bounty per bite: the first meals are the hardest thing to find, and a
+    fly that drinks and rests but never eats is a wall evolution otherwise sits behind."""
+    return fitness_wellbeing(stats) + 100.0 * stats.bites
+
+
+FITNESSES = {
+    "lifespan": fitness_lifespan,
+    "wellbeing": fitness_wellbeing,
+    "forager": fitness_forager,
+}
