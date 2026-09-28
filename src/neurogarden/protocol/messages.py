@@ -18,6 +18,7 @@ PROTOCOL_VERSION = 1
 OWNER_PATTERN = r"^[A-Za-z0-9_.-]{1,64}$"
 TEXT_PATTERN = r"^[^\x00-\x1f\x7f]*$"  # no control characters, no escape sequences
 SAY_MAX = 40
+REPLAY_SPEED, REPLAY_SPEED_MIN, REPLAY_SPEED_MAX = 4.0, 0.25, 64.0
 
 
 class Model(BaseModel):
@@ -86,6 +87,14 @@ class Say(Model):
     """A brain's thought bubble: plain text spectators can see over the fly."""
 
     text: str = Field(max_length=SAY_MAX, pattern=TEXT_PATTERN)
+
+
+class Replay(Model):
+    """A spectator asks to watch an archived life again: a ghost, at `speed` × the world's pace."""
+
+    owner: str = Field(pattern=OWNER_PATTERN)
+    lineage: int = Field(ge=1)
+    speed: float = Field(default=REPLAY_SPEED, ge=REPLAY_SPEED_MIN, le=REPLAY_SPEED_MAX)
 
 
 # --- payloads: server -> client ----------------------------------------------------------
@@ -201,6 +210,7 @@ class OwnerScore(OpenModel):
     lives: int
     best_lifespan: int
     alive: bool
+    best_lineage: int = 0  # the life that set best_lifespan; 0 while none has ended
 
 
 class ResourceView(OpenModel):
@@ -233,6 +243,20 @@ class Error(OpenModel):
     code: str
     message: str
     fatal: bool
+
+
+class ReplayInfo(OpenModel):
+    """Brackets a ghost: sent before its first frame (`done` false) and after its last."""
+
+    owner: str
+    lineage: int
+    name: str
+    born_tick: int
+    died_tick: int | None  # None: the life was still going when the archive was read
+    lifespan: int | None
+    causes: list[str]
+    speed: float
+    done: bool
 
 
 # --- envelopes ---------------------------------------------------------------------------
@@ -269,6 +293,11 @@ class LeaveMessage(_ClientEnvelope):
 class SayMessage(_ClientEnvelope):
     type: Literal["say"] = "say"
     payload: Say
+
+
+class ReplayMessage(_ClientEnvelope):
+    type: Literal["replay"] = "replay"
+    payload: Replay
 
 
 class WelcomeMessage(_ServerEnvelope):
@@ -311,8 +340,13 @@ class ErrorMessage(_ServerEnvelope):
     payload: Error
 
 
+class ReplayInfoMessage(_ServerEnvelope):
+    type: Literal["replay"] = "replay"
+    payload: ReplayInfo
+
+
 ClientMessage = Annotated[
-    HelloMessage | JoinMessage | ActionMessage | LeaveMessage | SayMessage,
+    HelloMessage | JoinMessage | ActionMessage | LeaveMessage | SayMessage | ReplayMessage,
     Field(discriminator="type"),
 ]
 ServerMessage = Annotated[
@@ -323,13 +357,14 @@ ServerMessage = Annotated[
     | WorldMessage
     | FrameMessage
     | ChronicleMessage
-    | ErrorMessage,
+    | ErrorMessage
+    | ReplayInfoMessage,
     Field(discriminator="type"),
 ]
 
-CLIENT_TYPES = frozenset({"hello", "join", "action", "leave", "say"})
+CLIENT_TYPES = frozenset({"hello", "join", "action", "leave", "say", "replay"})
 SERVER_TYPES = frozenset(
-    {"welcome", "joined", "observation", "died", "world", "frame", "chronicle", "error"}
+    {"welcome", "joined", "observation", "died", "world", "frame", "chronicle", "error", "replay"}
 )
 
 client_adapter: TypeAdapter = TypeAdapter(ClientMessage)

@@ -25,6 +25,8 @@ from neurogarden.protocol.messages import (
     HelloMessage,
     JoinMessage,
     LeaveMessage,
+    Replay,
+    ReplayMessage,
     Say,
     SayMessage,
 )
@@ -35,11 +37,11 @@ SERVER_DEFS = (
     "JoinedMessage", "Joined", "ObservationMessage", "Observation", "Channels", "AgentEvent",
     "DiedMessage", "Died", "Stats", "WorldMessage", "WorldMap", "FrameMessage", "Frame",
     "AgentView", "WorldEvent", "OwnerScore", "ResourceView", "ChronicleMessage", "Chronicle",
-    "ErrorMessage", "Error",
+    "ErrorMessage", "Error", "ReplayInfoMessage", "ReplayInfo",
 )  # fmt: skip
 CLIENT_DEFS = (
     "HelloMessage", "Hello", "JoinMessage", "Join", "ActionMessage", "Action",
-    "LeaveMessage", "Leave", "SayMessage", "Say",
+    "LeaveMessage", "Leave", "SayMessage", "Say", "ReplayMessage", "Replay",
 )  # fmt: skip
 
 
@@ -56,6 +58,7 @@ def test_envelope_round_trip_for_every_client_message():
         ActionMessage(payload=Action(tick=3, action=2)),
         LeaveMessage(),
         SayMessage(payload=Say(text="fruit?")),
+        ReplayMessage(payload=Replay(owner="alice", lineage=2, speed=8.0)),
     ]
     for message in messages:
         wire = json.loads(encode(message))
@@ -179,8 +182,8 @@ def test_schema_is_a_2020_12_document_with_both_unions():
     defs = schema["$defs"]
     assert {"ClientMessage", "ServerMessage", "HelloMessage", "FrameMessage"} <= set(defs)
     assert defs["ClientMessage"]["discriminator"]["propertyName"] == "type"
-    assert len(defs["ClientMessage"]["oneOf"]) == 5
-    assert len(defs["ServerMessage"]["oneOf"]) == 8
+    assert len(defs["ClientMessage"]["oneOf"]) == 6
+    assert len(defs["ServerMessage"]["oneOf"]) == 9
     assert json.loads(schema_text()) == schema
 
 

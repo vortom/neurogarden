@@ -27,6 +27,8 @@ from neurogarden.protocol.messages import (
     Observation,
     ObservationMessage,
     OwnerScore,
+    ReplayInfo,
+    ReplayInfoMessage,
     ResourceView,
     Stats,
     Welcome,
@@ -126,6 +128,22 @@ def error_message(code: str, message: str, fatal: bool = False) -> ErrorMessage:
     return ErrorMessage(payload=Error(code=code, message=message, fatal=fatal))
 
 
+def replay_message(life, speed: float, done: bool) -> ReplayInfoMessage:
+    """Who a ghost is (an `archive.Life`), sent before its first frame and after its last."""
+    payload = ReplayInfo(
+        owner=life.owner,
+        lineage=life.lineage,
+        name=life.name,
+        born_tick=life.born_tick,
+        died_tick=life.died_tick,
+        lifespan=life.lifespan,
+        causes=list(life.causes),
+        speed=speed,
+        done=done,
+    )
+    return ReplayInfoMessage(payload=payload)
+
+
 def frame_message(
     world: World, roster: Roster, events: list[Event], tick: int, says: dict[int, str]
 ) -> FrameMessage:
@@ -174,6 +192,7 @@ def frame_message(
             owner=s.owner,
             lives=s.lineage,
             best_lifespan=s.best_lifespan,
+            best_lineage=s.best_lineage,
             alive=s.agent_id is not None,
         )
         for s in roster.scores()
