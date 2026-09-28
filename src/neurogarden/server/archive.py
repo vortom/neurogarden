@@ -208,9 +208,6 @@ class Archive:
                 f"{path} is an archive of version {info.archive_version}; "
                 f"this neurogarden writes version {ARCHIVE_VERSION}"
             )
-        if info is None and readonly:  # a database, but not one of ours (or not yet)
-            archive.close()
-            raise ArchiveError(f"{path} holds no world")
         return archive
 
     @classmethod

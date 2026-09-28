@@ -22,7 +22,7 @@ from neurogarden.protocol import ProtocolError, build_catalog, schema_text
 from neurogarden.sdk import DEFAULT_URL, AsyncClient, ConnectionLost, ServerError, run_brain
 from neurogarden.server import Archive, ServerConfig, history, parse_npc, serve
 from neurogarden.server import frames as server_frames
-from neurogarden.server.archive import MEMORY, Life
+from neurogarden.server.archive import MEMORY, ArchiveError, Life
 from neurogarden.server.roster import GhostRoster
 from neurogarden.server.static_files import bundle_present
 
@@ -259,7 +259,12 @@ def cmd_schema(args) -> int:
 
 
 def _open_archive(path: str) -> Archive:
-    return Archive.open(path, readonly=True)  # raises ArchiveError (a ValueError) if missing
+    """An archive to read from; raises ArchiveError (a ValueError) for anything else."""
+    archive = Archive.open(path, readonly=True)
+    if archive.world_info is None:  # a database, but not (yet) a world: nothing to read
+        archive.close()
+        raise ArchiveError(f"{path} holds no world")
+    return archive
 
 
 def _find_life(archive: Archive, owner: str, lineage: int) -> Life:

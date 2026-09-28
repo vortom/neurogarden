@@ -404,3 +404,15 @@ def test_a_rebuilt_world_remembers_meals_like_the_chronicler(snapshot_every):
     rebuilt = history.rebuild(runner.archive)
     assert rebuilt.last_meal == runner._chronicler.last_meal
     assert rebuilt.world.state_hash() == runner.world.state_hash()
+
+
+def test_an_archive_that_died_before_its_world_row_is_a_fresh_one(tmp_path):
+    """serve creates the file and its tables before the world row: a crash in between must
+    not leave a file that can neither be resumed nor started."""
+    path = str(tmp_path / "garden.db")
+    Archive.open(path).close()  # the schema is there, the world is not
+    assert Archive.peek(path) is None
+    runner = new_runner(Archive.open(path), seed=2)
+    assert runner.archive.world_info.seed == 2
+    runner.archive.close()
+    assert Archive.peek(path).seed == 2
