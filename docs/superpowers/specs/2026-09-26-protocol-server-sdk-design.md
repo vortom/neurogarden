@@ -425,3 +425,8 @@ Deviations from sections 2–6:
 - The implementation was written and tested as a whole and committed in seven
   reviewable steps rather than transcribed from a code-carrying plan; the last
   two apply what two reviews of the first five found.
+
+Superseded by sub-project 4 (`2026-09-28-archive-replay-design.md`): the
+in-memory `spawn_log` / `action_log` are gone; the runner writes every tick's
+inputs (despawns, spawns with their tiles, actions) to the archive, dead flies
+are despawned the tick after they die, and a restart resumes the same world.
