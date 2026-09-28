@@ -53,7 +53,7 @@ class Chronicler:
         self._config = config
         self._width = width
         self._height = height
-        self._last_meal: dict[int, int] = {}
+        self.last_meal: dict[int, int] = {}  # agent_id -> tick; archived, so a restart keeps it
 
     def _where(self, subject: Subject) -> str:
         return sector(subject.x, subject.y, self._width, self._height)
@@ -81,9 +81,9 @@ class Chronicler:
                 continue
             who = f"{subject.name} ({subject.owner})"
             if event.type == "ate":
-                if tick - self._last_meal.get(event.agent_id, -_MEAL_GAP) < _MEAL_GAP:
+                if tick - self.last_meal.get(event.agent_id, -_MEAL_GAP) < _MEAL_GAP:
                     continue
-                self._last_meal[event.agent_id] = tick
+                self.last_meal[event.agent_id] = tick
                 out.append(f"{when}: {who} finds fruit in {self._where(subject)}.")
             elif event.type == "need_depleted":
                 need = event.data.get("need", "something")

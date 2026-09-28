@@ -14,7 +14,8 @@ from neurogarden.engine.body import Action
 from neurogarden.engine.world import World
 from neurogarden.protocol.catalog import build_catalog
 
-from . import frames
+from . import frames, history
+from .archive import Archive
 from .chronicle import Chronicler, Subject
 from .ports import LocalPort
 from .roster import Roster
@@ -22,6 +23,8 @@ from .roster import Roster
 log = logging.getLogger("neurogarden.server")
 RECENT_CHRONICLE = 30
 SAY_TTL = 150  # ticks a speech bubble stays over a fly
+SNAPSHOT_EVERY = 600  # half a day: the most a resume ever has to replay after a crash
+CHECKPOINT_EVERY = 100  # state hashes for `neurogarden verify`
 
 
 class WorldRunner:
@@ -29,23 +32,28 @@ class WorldRunner:
         self,
         world: World,
         *,
+        archive: Archive | None = None,
         tps: float = 5.0,
         map_name: str = "drosoville",
         motd: str = "",
         clock: Callable[[], float] = time.monotonic,
+        snapshot_every: int = SNAPSHOT_EVERY,
+        checkpoint_every: int = CHECKPOINT_EVERY,
     ) -> None:
         if tps <= 0:
             raise ValueError("tps must be positive")
+        if snapshot_every <= 0 or checkpoint_every <= 0:
+            raise ValueError("snapshot_every and checkpoint_every must be positive")
         self.world = world
         self.tps = tps
         self.map_name = map_name
         self.motd = motd
         self.clock = clock
+        self.snapshot_every = snapshot_every
+        self.checkpoint_every = checkpoint_every
         self.catalog = build_catalog()
         self.roster = Roster()
         self.spectators: list = []
-        self.spawn_log: list[tuple[int, int, str, int, str]] = []  # tick, agent, owner, life, body
-        self.action_log: list[dict[int, int]] = []  # actions applied per tick, idle included
         self.chronicle: deque[tuple[int, str]] = deque(maxlen=RECENT_CHRONICLE)
         self._chronicler = Chronicler(world.config, world.state.width, world.state.height)
         self._queued_joins: list = []
@@ -55,6 +63,29 @@ class WorldRunner:
         self._trackers: dict[int, StatsTracker] = {}
         self._says: dict[int, tuple[int, str]] = {}  # agent_id -> (tick said, text)
         self._next_tick_at: float | None = None
+        self.broken = False  # a tick raised: the world in memory is not to be trusted
+        # Every input the world gets is written down; a world without a file gets a memory.
+        self.archive = archive if archive is not None else Archive.open()
+        if self.archive.world_info is None:
+            self.archive.create_world(
+                map_name, world.map_text or "", None, world.config, world.snapshot()
+            )
+
+    @classmethod
+    def from_archive(cls, archive: Archive, **options) -> WorldRunner:
+        """The world where the archive left off: flies, lineages, scores and log included."""
+        info = archive.world_info
+        if info is None:
+            raise ValueError(f"{archive.path} holds no world to resume")
+        rebuilt = history.rebuild(archive)
+        runner = cls(rebuilt.world, archive=archive, map_name=info.map_name, **options)
+        runner._trackers = rebuilt.trackers
+        runner._chronicler.last_meal = rebuilt.last_meal
+        runner.roster.restore(archive.lives())
+        runner.chronicle.extend(archive.recent_chronicle(RECENT_CHRONICLE))
+        for agent_id in runner._trackers:
+            runner.missed[agent_id] = 0
+        return runner
 
     # --- what clients ask --------------------------------------------------------------
 
@@ -138,11 +169,31 @@ class WorldRunner:
     # --- the tick ---------------------------------------------------------------------
 
     def tick(self) -> None:
+        """One tick, one transaction: what the archive holds is exactly what happened."""
+        try:
+            with self.archive.transaction():
+                self._tick()
+        except BaseException:
+            self.broken = True
+            raise
+
+    def save_snapshot(self) -> None:
+        """Write the world as it stands, so the next resume replays nothing."""
+        if self.broken:
+            return
+        extras = {
+            "trackers": {str(a): t.to_dict() for a, t in self._trackers.items()},
+            "last_meal": {str(a): t for a, t in self._chronicler.last_meal.items()},
+        }
+        self.archive.save_snapshot(self.world.tick, self.world.snapshot(), extras)
+
+    def _tick(self) -> None:
         tick = self.world.tick
-        self._apply_joins(tick)
+        despawned = self._clear_corpses()
+        spawned = self._apply_joins(tick)
         actions = self._collect_actions()
         result = self.world.step(actions)
-        self.action_log.append(actions)
+        self.archive.record_tick(tick, spawned, despawned, actions)
 
         for agent_id, tracker in self._trackers.items():
             if agent_id in result.observations:
@@ -176,9 +227,22 @@ class WorldRunner:
                 spectator.deliver(frame)
         for text in self._chronicler.lines(tick, result.events, subjects):
             self._note(text, tick)
+        after = self.world.tick
+        if after % self.checkpoint_every == 0:
+            self.archive.checkpoint(after, self.world.state_hash())
+        if after % self.snapshot_every == 0:
+            self.save_snapshot()
         log.debug("tick %d: %d living, %d watching", tick, len(ours), len(self.spectators))
 
-    def _apply_joins(self, tick: int) -> None:
+    def _clear_corpses(self) -> list[int]:
+        """A dead fly stays in the world for the tick it died (its last frame), then leaves."""
+        corpses = [agent.id for agent in self.world.state.agents.values() if not agent.alive]
+        for agent_id in corpses:
+            self.world.despawn(agent_id)
+        return corpses
+
+    def _apply_joins(self, tick: int) -> list[tuple[int, str, int, int]]:
+        spawned: list[tuple[int, str, int, int]] = []
         queued, self._queued_joins = self._queued_joins, []
         for port, body in queued:
             if port.closing:
@@ -201,7 +265,8 @@ class WorldRunner:
                 continue
             lineage, name = self.roster.born(port.owner, agent_id)
             agent = self.world.state.agents[agent_id]
-            self.spawn_log.append((tick, agent_id, port.owner, lineage, body))
+            spawned.append((agent_id, body, agent.x, agent.y))
+            self.archive.born(agent_id, port.owner, lineage, name, body, tick)
             self._trackers[agent_id] = StatsTracker(
                 agent_id, (agent.x, agent.y), self.world.config.day_length
             )
@@ -209,6 +274,7 @@ class WorldRunner:
             port.deliver(frames.joined_message(agent_id, lineage, name, tick, False))
             self._note(self._chronicler.born(tick, self._subject(agent_id), lineage), tick)
             log.info("%s joined as %s (#%d, agent %d)", port.owner, name, lineage, agent_id)
+        return spawned
 
     def _collect_actions(self) -> dict[int, int]:
         actions: dict[int, int] = {}
@@ -237,6 +303,7 @@ class WorldRunner:
         stats = self._trackers.pop(agent_id).stats
         record = self.roster.record(agent_id)
         self.roster.died(agent_id, stats.lifespan)
+        self.archive.died(agent_id, tick, causes, stats)
         for table in (self._pending, self._last_sent, self.missed, self._says):
             table.pop(agent_id, None)
         if port is not None:
@@ -255,6 +322,7 @@ class WorldRunner:
     def _note(self, text: str, tick: int | None = None) -> None:
         tick = self.world.tick if tick is None else tick
         self.chronicle.append((tick, text))
+        self.archive.note(tick, text)
         message = frames.chronicle_message(tick, text)
         for spectator in self.spectators:
             spectator.deliver(message)
@@ -280,3 +348,4 @@ class WorldRunner:
                 log.exception("tick %d failed; stopping the world", self.world.tick)
                 stop.set()
                 return
+        self.save_snapshot()  # a clean stop leaves nothing to replay on resume

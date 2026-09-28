@@ -25,6 +25,7 @@ class OwnerState:
     name: str = ""
     port: Any = None  # the attached AgentPort, or None while the brain is away
     best_lifespan: int = 0
+    best_lineage: int = 0  # which life it was; 0 until a first life has ended
     lifespans: list[int] = field(default_factory=list)
 
 
@@ -66,11 +67,29 @@ class Roster:
         return state.lineage, state.name
 
     def died(self, agent_id: int, lifespan: int) -> OwnerState:
-        state = self.state(self.agents[agent_id].owner)
+        record = self.agents[agent_id]
+        state = self.state(record.owner)
         state.agent_id = None
-        state.lifespans.append(lifespan)
-        state.best_lifespan = max(state.best_lifespan, lifespan)
+        self._ended(state, record.lineage, lifespan)
         return state
+
+    @staticmethod
+    def _ended(state: OwnerState, lineage: int, lifespan: int) -> None:
+        state.lifespans.append(lifespan)
+        if state.best_lineage == 0 or lifespan > state.best_lifespan:  # a tie keeps the first
+            state.best_lifespan, state.best_lineage = lifespan, lineage
+
+    def restore(self, lives) -> None:
+        """Rebuild owners and records from archived lives (`archive.Life`), oldest first."""
+        for life in sorted(lives, key=lambda life: (life.owner, life.lineage)):
+            state = self.state(life.owner)
+            state.lineage = max(state.lineage, life.lineage)
+            state.name = life.name  # the latest fly's, alive or not, as `born` leaves it
+            self.agents[life.agent_id] = AgentRecord(life.owner, life.lineage, life.name)
+            if life.died_tick is None:
+                state.agent_id = life.agent_id
+            else:
+                self._ended(state, life.lineage, life.lifespan or 0)
 
     def record(self, agent_id: int) -> AgentRecord | None:
         return self.agents.get(agent_id)
@@ -97,3 +116,17 @@ class Roster:
         """Owners who have hatched at least one fly: best lifespan first, then name."""
         lived = [state for state in self.owners.values() if state.lineage > 0]
         return sorted(lived, key=lambda s: (-s.best_lifespan, s.owner))
+
+
+class GhostRoster(Roster):
+    """Names for archived flies. Every ghost counts as connected; the hall of flies stays empty."""
+
+    def __init__(self, lives) -> None:
+        super().__init__()
+        self.restore(lives)
+
+    def connected(self, agent_id: int) -> bool:
+        return True
+
+    def scores(self) -> list[OwnerState]:
+        return []

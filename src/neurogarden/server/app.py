@@ -11,8 +11,9 @@ from dataclasses import dataclass, field
 from websockets.asyncio.server import serve as websockets_serve
 
 from neurogarden.brains import BRAINS
-from neurogarden.engine import Config, World, maps
+from neurogarden.engine import RULES_VERSION, Config, World, maps
 
+from .archive import MEMORY, Archive, ArchiveError, WorldInfo
 from .gateway import Gateway
 from .ports import LocalPort
 from .runner import WorldRunner
@@ -37,6 +38,23 @@ class ServerConfig:
     web: bool = True  # serve the built browser client on plain HTTP GETs
     motd: str = DEFAULT_MOTD
     config: Config | None = None
+    archive: str = MEMORY  # the world's file; `:memory:` for a world that ends with its process
+
+
+def check_identity(info: WorldInfo, config: ServerConfig, path: str) -> None:
+    """An archive holds one world; serving it under another name or seed is refused."""
+    if info.rules_version != RULES_VERSION:
+        raise ArchiveError(
+            f"{path} was written under rules_version {info.rules_version}; this engine is "
+            f"{RULES_VERSION} — resume it with the older neurogarden, or start a new archive"
+        )
+    if (info.map_name, info.seed) != (config.map, config.seed):
+        raise ArchiveError(
+            f"{path} holds {info.map_name} (seed {info.seed}), not {config.map} "
+            f"(seed {config.seed}); pass --archive another.db for a new world"
+        )
+    if config.config is not None and config.config != info.config:
+        raise ArchiveError(f"{path} was created with other engine settings than these")
 
 
 def _is_loopback(host: str) -> bool:
@@ -93,9 +111,31 @@ class Server:
         if not _is_loopback(config.host) and config.token == DEFAULT_TOKEN:
             raise ValueError(f"refusing to bind {config.host} with the default token; pass --token")
         self.config = config
-        map_text = maps.load(config.map) if config.map in maps.available() else config.map
-        world = World.from_map(map_text, config.config or Config(), config.seed)
-        self.runner = WorldRunner(world, tps=config.tps, map_name=config.map, motd=config.motd)
+        self.archive = Archive.open(config.archive)
+        try:
+            info = self.archive.world_info
+            self.resumed = info is not None
+            if info is None:
+                map_text = maps.load(config.map) if config.map in maps.available() else config.map
+                world = World.from_map(map_text, config.config or Config(), config.seed)
+                self.archive.create_world(
+                    config.map, world.map_text, config.seed, world.config, world.snapshot()
+                )
+                self.runner = WorldRunner(
+                    world,
+                    archive=self.archive,
+                    tps=config.tps,
+                    map_name=config.map,
+                    motd=config.motd,
+                )
+            else:
+                check_identity(info, config, config.archive)
+                self.runner = WorldRunner.from_archive(
+                    self.archive, tps=config.tps, motd=config.motd
+                )
+        except BaseException:
+            self.archive.close()
+            raise
         self.gateway = Gateway(self.runner, config.token, config.hello_timeout)
         self.stop = asyncio.Event()
         self.port: int = config.port
@@ -128,12 +168,14 @@ class Server:
         self.port = self._ws.sockets[0].getsockname()[1]
         self._ticker = asyncio.get_running_loop().create_task(self.runner.run(self.stop))
         log.info(
-            "world %s (seed %d) live on ws://%s:%d at %.1f tps",
+            "world %s (seed %d) %s on ws://%s:%d at %.1f tps, tick %d",
             self.config.map,
             self.config.seed,
+            "resumed" if self.resumed else "live",
             self.config.host,
             self.port,
             self.config.tps,
+            self.runner.world.tick,
         )
         return self
 
@@ -145,9 +187,12 @@ class Server:
                 if isinstance(stopped, BaseException):  # retrieved, so never "never retrieved"
                     log.error("the world stopped ticking", exc_info=stopped)
         finally:
-            if self._ws is not None:  # the listener closes even if the ticker died
-                self._ws.close(close_connections=True, code=1001, reason="server shutting down")
-                await self._ws.wait_closed()
+            try:
+                if self._ws is not None:  # the listener closes even if the ticker died
+                    self._ws.close(close_connections=True, code=1001, reason="server shutting down")
+                    await self._ws.wait_closed()
+            finally:
+                self.archive.close()
 
     @property
     def url(self) -> str:
