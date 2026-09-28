@@ -14,8 +14,10 @@ from collections import defaultdict
 
 import numpy as np
 
-from neurogarden.brains import BRAINS
+from neurogarden.brains import BRAINS, EvolvedBrain, Genome
+from neurogarden.dojo.evolve import EvolveConfig, evolve
 from neurogarden.dojo.render_ansi import AgentGlimpse, View, render_view
+from neurogarden.dojo.stats import FITNESSES
 from neurogarden.engine import RULES_VERSION
 from neurogarden.engine.clock import day_number
 from neurogarden.protocol import ProtocolError, build_catalog, schema_text
@@ -83,6 +85,9 @@ def build_parser() -> argparse.ArgumentParser:
     join_cmd.add_argument("--owner", required=True)
     join_cmd.add_argument("--seed", type=int, default=0)
     join_cmd.add_argument("--lives", type=int, default=None, help="stop after N lives")
+    join_cmd.add_argument(
+        "--weights", default=None, metavar="FILE.npz", help="an evolved brain's own weights"
+    )
     _add_connection_args(join_cmd)
 
     watch_cmd = commands.add_parser("watch", help="spectate a live world in the terminal")
@@ -93,6 +98,30 @@ def build_parser() -> argparse.ArgumentParser:
     _add_connection_args(watch_cmd)
 
     commands.add_parser("schema", help="print the protocol JSON Schema")
+
+    evolve_cmd = commands.add_parser("evolve", help="evolve a tiny brain in the dojo")
+    evolve_cmd.add_argument("--out", required=True, metavar="FILE.npz", help="where the weights go")
+    evolve_cmd.add_argument("--generations", type=int, default=EvolveConfig.generations)
+    evolve_cmd.add_argument("--population", type=int, default=EvolveConfig.population)
+    evolve_cmd.add_argument("--episodes", type=int, default=EvolveConfig.episodes)
+    evolve_cmd.add_argument("--max-steps", type=int, default=EvolveConfig.max_steps)
+    evolve_cmd.add_argument("--sigma", type=float, default=EvolveConfig.sigma)
+    evolve_cmd.add_argument("--learning-rate", type=float, default=EvolveConfig.learning_rate)
+    evolve_cmd.add_argument("--hidden", type=int, default=EvolveConfig.hidden)
+    evolve_cmd.add_argument("--fitness", choices=sorted(FITNESSES), default=EvolveConfig.fitness)
+    evolve_cmd.add_argument(
+        "--temperature",
+        type=float,
+        default=EvolveConfig.temperature,
+        help="softmax temperature the brains act at; 0 = always the highest score",
+    )
+    evolve_cmd.add_argument("--seed", type=int, default=EvolveConfig.seed)
+    evolve_cmd.add_argument(
+        "--workers", type=int, default=None, help="evaluation processes (default: all cores)"
+    )
+    evolve_cmd.add_argument(
+        "--start", default=None, metavar="FILE.npz", help="carry on from these weights"
+    )
 
     lives_cmd = commands.add_parser("lives", help="the hall of flies: every life in an archive")
     _add_archive_arg(lives_cmd, "the world's file")
@@ -161,8 +190,19 @@ def cmd_serve(args) -> int:
     return 0
 
 
+def _make_brain(args):
+    if args.weights is not None:
+        if args.brain != "evolved":
+            raise ValueError("--weights is for --brain evolved")
+        return EvolvedBrain(seed=args.seed, path=args.weights)
+    return BRAINS[args.brain](seed=args.seed)
+
+
 def cmd_join(args) -> int:
-    brain = BRAINS[args.brain](seed=args.seed)
+    try:
+        brain = _make_brain(args)
+    except (ValueError, OSError) as err:  # no such file, or not an evolved brain's weights
+        return _refuse(err)
 
     def report(fly) -> None:
         stats = fly.stats
@@ -425,7 +465,53 @@ def cmd_verify(args) -> int:
     return 0
 
 
+def cmd_evolve(args) -> int:
+    try:
+        config = EvolveConfig(
+            generations=args.generations,
+            population=args.population,
+            sigma=args.sigma,
+            learning_rate=args.learning_rate,
+            hidden=args.hidden,
+            episodes=args.episodes,
+            max_steps=args.max_steps,
+            seed=args.seed,
+            workers=args.workers,
+            fitness=args.fitness,
+            temperature=args.temperature,
+        )
+        start = Genome.load(args.start)[0] if args.start is not None else None
+    except (ValueError, OSError) as err:
+        return _refuse(err)
+
+    def report(generation) -> None:
+        print(
+            f"gen {generation.index + 1:>3}/{config.generations}: best {generation.best:7.0f}"
+            f"  mean {generation.mean:7.0f}  centre {generation.centre:7.0f}"
+            f"  ({generation.seconds:.1f}s)",
+            flush=True,
+        )
+
+    print(
+        f"evolving a {config.hidden}-neuron brain: {config.generations} generations of "
+        f"{config.population}, {config.episodes} lives each up to {config.max_steps} ticks, "
+        f"fitness {config.fitness}, temperature {config.temperature}"
+    )
+    try:
+        result = evolve(config, start=start, on_generation=report)
+    except KeyboardInterrupt:
+        print("stopped; nothing written", file=sys.stderr)
+        return 1
+    try:
+        result.genome.save(args.out, result.meta)
+    except OSError as err:
+        return _refuse(err)
+    print(f"wrote {args.out}")
+    return 0
+
+
 COMMANDS = {
+    "evolve": cmd_evolve,
     "serve": cmd_serve,
     "join": cmd_join,
     "watch": cmd_watch,

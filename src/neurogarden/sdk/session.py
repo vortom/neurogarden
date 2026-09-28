@@ -6,7 +6,7 @@ import asyncio
 import threading
 from collections.abc import Iterator
 
-from neurogarden.brains.base import Brain, brain_seed
+from neurogarden.brains.base import THOUGHT_EVERY, Brain, brain_seed, think
 from neurogarden.dojo.stats import EpisodeStats
 from neurogarden.protocol.messages import Died, Joined, Welcome
 
@@ -128,6 +128,8 @@ def run_brain(
             brain.reset(brain_seed(fly.lineage))
             for observation in fly.observations():
                 fly.act(observation.tick, int(brain.act(observation.channels)))
+                if observation.tick % THOUGHT_EVERY == 0 and (thought := think(brain)):
+                    fly.say(thought)  # a brain with thoughts shows them, like a hosted one
             finished.append(fly.stats)
             if on_life is not None:
                 on_life(fly)

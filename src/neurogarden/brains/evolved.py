@@ -1,0 +1,152 @@
+"""The evolved brain: a tiny network whose weights were found by evolution in the dojo.
+
+Twenty-five numbers in (the tiny features), a hidden layer of a few neurons, seven action
+scores out. With a temperature the action is drawn from the softmax of the scores (the way
+it was evolved: a policy that always does the same thing gives evolution nothing to rank);
+without one, the highest score wins. No rules, no memory: everything it knows about living
+in Drosoville is in the weights, and the weights came from lifespans.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from importlib import resources
+from pathlib import Path
+
+import numpy as np
+
+from neurogarden.dojo.features import DEFAULT_AGE_SCALE, FEATURES_VERSION, TINY_SIZE, tiny_features
+from neurogarden.engine.body import Action
+from neurogarden.engine.rng import SplitMix64
+
+DEFAULT_HIDDEN = 16
+DEFAULT_WEIGHTS = "evolved-v1.npz"  # shipped in neurogarden/brains/weights/
+_SPARKS = "▁▂▃▄▅▆▇█"
+
+
+@dataclass
+class Genome:
+    """The weights of one brain, as arrays (to think with) or as one vector (to evolve)."""
+
+    w1: np.ndarray  # (TINY_SIZE, hidden)
+    b1: np.ndarray  # (hidden,)
+    w2: np.ndarray  # (hidden, actions)
+    b2: np.ndarray  # (actions,)
+
+    @classmethod
+    def zeros(cls, hidden: int = DEFAULT_HIDDEN, actions: int = len(Action)) -> Genome:
+        return cls(
+            w1=np.zeros((TINY_SIZE, hidden), np.float32),
+            b1=np.zeros(hidden, np.float32),
+            w2=np.zeros((hidden, actions), np.float32),
+            b2=np.zeros(actions, np.float32),
+        )
+
+    @property
+    def hidden(self) -> int:
+        return self.b1.shape[0]
+
+    @property
+    def size(self) -> int:
+        return sum(part.size for part in self.parts())
+
+    def parts(self) -> tuple[np.ndarray, ...]:
+        return (self.w1, self.b1, self.w2, self.b2)
+
+    def to_vector(self) -> np.ndarray:
+        return np.concatenate([part.ravel() for part in self.parts()]).astype(np.float32)
+
+    def with_vector(self, vector: np.ndarray) -> Genome:
+        """A genome of the same shape carrying these weights."""
+        if vector.shape != (self.size,):
+            raise ValueError(f"expected {self.size} weights, got {vector.shape}")
+        out, at = [], 0
+        for part in self.parts():
+            out.append(vector[at : at + part.size].reshape(part.shape).astype(np.float32))
+            at += part.size
+        return Genome(*out)
+
+    def save(self, path: str | Path, meta: dict | None = None) -> None:
+        """An .npz with the four arrays and a `meta` JSON string (how it came to be)."""
+        stamp = {"features_version": FEATURES_VERSION, "hidden": self.hidden, **(meta or {})}
+        np.savez(path, w1=self.w1, b1=self.b1, w2=self.w2, b2=self.b2, meta=json.dumps(stamp))
+
+    @classmethod
+    def load(cls, path: str | Path) -> tuple[Genome, dict]:
+        with np.load(path) as data:
+            meta = json.loads(str(data["meta"])) if "meta" in data else {}
+            genome = cls(*(data[name].astype(np.float32) for name in ("w1", "b1", "w2", "b2")))
+        if genome.w1.shape[0] != TINY_SIZE:
+            raise ValueError(
+                f"{path}: weights expect {genome.w1.shape[0]} features, not {TINY_SIZE}"
+            )
+        if meta.get("features_version", FEATURES_VERSION) != FEATURES_VERSION:
+            raise ValueError(f"{path}: features_version {meta['features_version']} is not ours")
+        return genome, meta
+
+
+def hidden_activation(genome: Genome, features: np.ndarray) -> np.ndarray:
+    return np.tanh(features @ genome.w1 + genome.b1)
+
+
+def scores(genome: Genome, features: np.ndarray) -> np.ndarray:
+    """One score per action; the policy takes the highest."""
+    return hidden_activation(genome, features) @ genome.w2 + genome.b2
+
+
+def default_weights_path() -> Path:
+    return Path(str(resources.files("neurogarden.brains").joinpath("weights", DEFAULT_WEIGHTS)))
+
+
+def softmax(values: np.ndarray) -> np.ndarray:
+    shifted = np.exp(values - values.max())
+    return shifted / shifted.sum()
+
+
+class EvolvedBrain:
+    """Acts on the scores (drawn at `temperature`, else the highest); `thought()` is a glimpse
+    of its hidden layer for spectators.
+
+    `temperature=None` reads it from the weights file (how the brain was evolved); pass a
+    number to override, 0 for the highest score always.
+    """
+
+    def __init__(
+        self,
+        seed: int = 0,
+        path: str | Path | None = None,
+        genome: Genome | None = None,
+        temperature: float | None = None,
+    ) -> None:
+        self._seed = seed
+        if genome is not None:
+            self.genome, self.meta = genome, {}
+        else:
+            self.genome, self.meta = Genome.load(
+                path if path is not None else default_weights_path()
+            )
+        if temperature is None:
+            temperature = float(self.meta.get("temperature") or 0.0)
+        self.temperature = temperature
+        self._hidden = np.zeros(self.genome.hidden, np.float32)
+        self.reset()
+
+    def reset(self, seed: int | None = None) -> None:
+        self._rng = SplitMix64(self._seed if seed is None else seed)
+        self._hidden[:] = 0
+
+    def act(self, observation: dict[str, np.ndarray]) -> int:
+        features = tiny_features(observation, DEFAULT_AGE_SCALE)
+        self._hidden = hidden_activation(self.genome, features)
+        values = self._hidden @ self.genome.w2 + self.genome.b2
+        if self.temperature <= 0:
+            return int(np.argmax(values))
+        draw = self._rng.next_u64() / 2**64  # the brain's own stream: reproducible per seed
+        picked = np.searchsorted(np.cumsum(softmax(values / self.temperature)), draw)
+        return int(min(picked, len(values) - 1))
+
+    def thought(self) -> str:
+        """The hidden layer as a sparkline: a brain scope in a speech bubble."""
+        levels = np.clip(((self._hidden + 1) / 2 * (len(_SPARKS) - 1)).round(), 0, 7).astype(int)
+        return "".join(_SPARKS[level] for level in levels)
