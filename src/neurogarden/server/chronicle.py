@@ -46,6 +46,17 @@ def stamp(tick: int, config: Config) -> str:
     return f"Day {day_number(tick, config)}, {time_of_day(tick, config)}"
 
 
+def note_meal(last_meal: dict[int, int], agent_id: int, tick: int) -> bool:
+    """True for the first bite of a meal; bites within _MEAL_GAP ticks of it are the same meal.
+
+    Shared with the archive's rebuild, so a resumed world remembers the same meals.
+    """
+    if tick - last_meal.get(agent_id, -_MEAL_GAP) < _MEAL_GAP:
+        return False
+    last_meal[agent_id] = tick
+    return True
+
+
 class Chronicler:
     """Turns what happened into at most a few lines per tick; quiet ticks say nothing."""
 
@@ -81,9 +92,8 @@ class Chronicler:
                 continue
             who = f"{subject.name} ({subject.owner})"
             if event.type == "ate":
-                if tick - self.last_meal.get(event.agent_id, -_MEAL_GAP) < _MEAL_GAP:
+                if not note_meal(self.last_meal, event.agent_id, tick):
                     continue
-                self.last_meal[event.agent_id] = tick
                 out.append(f"{when}: {who} finds fruit in {self._where(subject)}.")
             elif event.type == "need_depleted":
                 need = event.data.get("need", "something")

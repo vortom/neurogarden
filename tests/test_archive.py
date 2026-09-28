@@ -319,3 +319,88 @@ def test_a_full_map_replay_is_deterministic_through_history():
     alice, bob = joined_agent(runner, "alice"), joined_agent(runner, "bob")
     drive(runner, [alice, bob], 30, seed=9)
     assert history.rebuild(runner.archive).world.state_hash() == runner.world.state_hash()
+
+
+# --- what the review asked for ---------------------------------------------------------------
+
+
+def test_a_bare_runner_archive_has_no_seed_and_the_server_still_serves_it(tmp_path):
+    path = str(tmp_path / "bare.db")
+    runner = WorldRunner(World.from_map(maps.load("drosoville")), archive=Archive.open(path))
+    joined_agent(runner, "carol")
+    runner.archive.close()
+    assert Archive.peek(path).seed is None
+
+    async def resume():
+        async with Server(ServerConfig(port=0, tps=50.0, npcs=[], archive=path)) as server:
+            return server.resumed, server.runner.roster.live_agent("carol")
+
+    import asyncio
+
+    assert asyncio.run(resume()) == (True, 1)
+
+
+def test_one_writer_per_archive_file(tmp_path):
+    pytest.importorskip("fcntl")
+    path = str(tmp_path / "garden.db")
+    first = Archive.open(path)
+    new_runner(first)  # a world, so a reader has something to read
+    with pytest.raises(ArchiveError, match="already being served"):
+        Archive.open(path)
+    reader = Archive.open(path, readonly=True)  # readers are welcome meanwhile
+    assert reader.world_info is not None
+    reader.close()
+    first.close()
+    second = Archive.open(path)  # the lock went with the first
+    second.close()
+
+
+def test_a_path_with_uri_characters_opens_read_only(tmp_path):
+    path = str(tmp_path / "world #1 100%.db")
+    runner = new_runner(Archive.open(path))
+    joined_agent(runner)
+    runner.archive.close()
+    reader = Archive.open(path, readonly=True)
+    assert reader.lives()[0].owner == "alice"
+    reader.close()
+
+
+def test_a_missing_directory_is_refused_not_a_traceback(tmp_path):
+    with pytest.raises(ArchiveError, match="cannot open"):
+        Archive.open(str(tmp_path / "no" / "such" / "dir" / "garden.db"))
+
+
+def test_the_bound_of_a_life_still_going_is_fixed_when_asked():
+    runner = new_runner(config=Config())
+    alice = joined_agent(runner)
+    for _ in range(4):
+        runner.tick()
+    life = runner.archive.life("alice", 1)
+    assert life.alive and runner.archive.life_end(life) == 5
+    runner.tick()
+    assert runner.archive.life_end(life) == 6  # what is archived now, not chased later
+    assert [m.tick for m in history.playback(runner.archive, 0, 5)] == [0, 1, 2, 3, 4]
+    assert alice.of("observation")
+
+
+@pytest.mark.parametrize("snapshot_every", [1000, 2])
+def test_a_rebuilt_world_remembers_meals_like_the_chronicler(snapshot_every):
+    """The fruit tile is at (3, 1), one step east and one north of the nest."""
+    runner = new_runner(config=Config(), snapshot_every=snapshot_every)
+    alice = joined_agent(runner)
+    for action in (Action.MOVE_E, Action.MOVE_N, Action.CONSUME, Action.CONSUME, Action.IDLE):
+        runner.submit_action(alice, alice.last("observation").tick, int(action))
+        runner.tick()
+    bites = sum(
+        1
+        for m in alice.inbox
+        if m.type == "observation"
+        for e in m.payload.events
+        if e.type == "ate"
+    )
+    assert bites == 2  # two bites of the same meal: one line, one memory
+    assert runner._chronicler.last_meal == {1: 3}
+    assert sum("finds fruit" in text for _, text in runner.chronicle) == 1
+    rebuilt = history.rebuild(runner.archive)
+    assert rebuilt.last_meal == runner._chronicler.last_meal
+    assert rebuilt.world.state_hash() == runner.world.state_hash()

@@ -15,6 +15,7 @@ from neurogarden.dojo.stats import StatsTracker
 from neurogarden.engine.world import StepResult, World
 
 from .archive import Archive, ArchiveError, TickInputs
+from .chronicle import note_meal
 
 
 @dataclass
@@ -66,8 +67,12 @@ def apply_inputs(
     return result
 
 
-def world_at(archive: Archive, tick: int) -> Rebuilt:
-    """The world as it stood before tick `tick` ran (so `world.tick == tick`)."""
+def rebuild_steps(archive: Archive, tick: int) -> Iterator[Rebuilt]:
+    """Rebuild the world as it stood before tick `tick` ran, one recorded tick at a time.
+
+    Yields the same `Rebuilt` after the snapshot and after every re-applied tick, so a
+    caller on an event loop can let others run in between; the last one is the answer.
+    """
     info = archive.world_info
     if info is None:
         raise ArchiveError(f"{archive.path} holds no world")
@@ -75,17 +80,34 @@ def world_at(archive: Archive, tick: int) -> Rebuilt:
     if found is None:
         raise ArchiveError(f"{archive.path} has no snapshot at or before tick {tick}")
     snapshot_tick, state, extras = found
-    world = World.restore(state, info.map_text)
-    trackers = {
-        int(agent_id): StatsTracker.from_dict(data)
-        for agent_id, data in extras.get("trackers", {}).items()
-    }
-    last_meal = {int(agent_id): int(at) for agent_id, at in extras.get("last_meal", {}).items()}
+    rebuilt = Rebuilt(
+        world=World.restore(state, info.map_text),
+        trackers={
+            int(agent_id): StatsTracker.from_dict(data)
+            for agent_id, data in extras.get("trackers", {}).items()
+        },
+        last_meal={int(agent_id): int(at) for agent_id, at in extras.get("last_meal", {}).items()},
+    )
+    yield rebuilt
     for inputs in archive.inputs(snapshot_tick, tick):
-        apply_inputs(world, inputs, trackers)
-    if world.tick != tick:
-        raise ArchiveError(f"{archive.path} ends at tick {world.tick}; tick {tick} was asked for")
-    return Rebuilt(world, trackers, last_meal)
+        result = apply_inputs(rebuilt.world, inputs, rebuilt.trackers)
+        for event in result.events:  # the chronicler's meal memory, kept the way it keeps it
+            if event.type == "ate":
+                note_meal(rebuilt.last_meal, event.agent_id, inputs.tick)
+        yield rebuilt
+    if rebuilt.world.tick != tick:
+        raise ArchiveError(
+            f"{archive.path} ends at tick {rebuilt.world.tick}; tick {tick} was asked for"
+        )
+
+
+def world_at(archive: Archive, tick: int) -> Rebuilt:
+    """The world as it stood before tick `tick` ran (so `world.tick == tick`)."""
+    steps = rebuild_steps(archive, tick)
+    rebuilt = next(steps)  # the same object every time; the generator fills it in
+    for _ in steps:
+        pass
+    return rebuilt
 
 
 def rebuild(archive: Archive) -> Rebuilt:
@@ -93,9 +115,17 @@ def rebuild(archive: Archive) -> Rebuilt:
     return world_at(archive, archive.next_tick())
 
 
-def playback(archive: Archive, from_tick: int, to_tick: int | None = None) -> Iterator[Moment]:
-    """Re-live the recorded ticks in [from_tick, to_tick) on a world of our own."""
-    world = world_at(archive, from_tick).world
+def playback(
+    archive: Archive, from_tick: int, to_tick: int | None = None, world: World | None = None
+) -> Iterator[Moment]:
+    """Re-live the recorded ticks in [from_tick, to_tick) on a world of our own.
+
+    `world` may be the one `rebuild_steps` produced for `from_tick`; otherwise it is built here.
+    """
+    if world is None:
+        world = world_at(archive, from_tick).world
+    elif world.tick != from_tick:
+        raise ArchiveError(f"the world given is at tick {world.tick}, not {from_tick}")
     for inputs in archive.inputs(from_tick, to_tick):
         result = apply_inputs(world, inputs)
         yield Moment(inputs.tick, world, result, inputs)
@@ -112,14 +142,15 @@ def verify(archive: Archive) -> Verified:
     """Re-run the whole history from its first snapshot and compare every stored hash.
 
     Raises ArchiveError at the first checkpoint or snapshot the re-run does not reproduce.
+    This is a consistency check, not tamper evidence: the first snapshot is where the
+    re-run starts, so it is trusted as it stands.
     """
     ticks = archive.snapshot_ticks()
     if not ticks:
         raise ArchiveError(f"{archive.path} has no snapshot to start from")
-    first = ticks[0]
-    snapshots = {tick: archive.latest_snapshot(tick) for tick in ticks}
+    first, later = ticks[0], set(ticks[1:])
     checkpoints = archive.checkpoints()
-    world = World.restore(snapshots[first][1])
+    world = World.restore(archive.latest_snapshot(first)[1])
     stepped = checked = matched = 0
 
     def compare(tick: int) -> None:
@@ -132,9 +163,9 @@ def verify(archive: Archive) -> Verified:
                     f"checkpoint at tick {tick} does not reproduce: "
                     f"stored {checkpoints[tick]}, re-run {actual}"
                 )
-        if tick in snapshots and tick != first:
+        if tick in later:
             matched += 1
-            stored = World.restore(snapshots[tick][1]).state_hash()
+            stored = World.restore(archive.latest_snapshot(tick)[1]).state_hash()
             if stored != actual:
                 raise ArchiveError(
                     f"snapshot at tick {tick} does not reproduce: stored {stored}, re-run {actual}"

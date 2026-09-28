@@ -226,6 +226,18 @@ Additions:
   half-changed, so `save_snapshot()` refuses to write it down.
 - `OwnerScore.best_lineage` (additive) so the hall of flies can link to the
   right life.
+- From the reviews: one writer per archive file (`<path>.lock`, an advisory
+  lock held while the archive is open; a second `serve` on the same file is
+  refused); one ghost a second per spectator (`error(replay_busy)`), since
+  starting one rebuilds a world; the rebuild of a ghost's starting world
+  yields to the live tick loop every 50 engine steps, and a ghost frame is
+  only built when the spectator has read the previous one (latest wins
+  anyway); the bound of a ghost is fixed when asked (`Archive.life_end`), so
+  a life still going plays up to what was archived and then is `done`;
+  `Replay.lineage` has an upper bound; the chronicler's meal memory is kept
+  during the rebuild after a crash, so the resumed log matches the
+  uninterrupted one; `verify` is a consistency check from the first
+  snapshot, not tamper evidence (the genesis is trusted as it stands).
 
 Deviations:
 

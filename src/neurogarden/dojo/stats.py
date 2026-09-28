@@ -27,6 +27,14 @@ class EpisodeStats:
     def score(self) -> int:
         return self.lifespan
 
+    def to_dict(self) -> dict:
+        """JSON-serialisable; the causes tuple becomes a list."""
+        return asdict(self) | {"death_causes": list(self.death_causes)}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> EpisodeStats:
+        return cls(**(dict(data) | {"death_causes": tuple(data["death_causes"])}))
+
 
 class StatsTracker:
     _COUNTERS = {"ate": "bites", "drank": "drinks", "rested": "rest_ticks", "bumped": "bumps"}
@@ -63,7 +71,7 @@ class StatsTracker:
         return {
             "agent_id": self._agent_id,
             "day_length": self._day_length,
-            "stats": asdict(self.stats) | {"death_causes": list(self.stats.death_causes)},
+            "stats": self.stats.to_dict(),
             "visited": sorted(self._visited),
             "wellbeing_sum": self._wellbeing_sum,
             "updates": self._updates,
@@ -72,9 +80,7 @@ class StatsTracker:
     @classmethod
     def from_dict(cls, data: dict) -> StatsTracker:
         tracker = cls(data["agent_id"], (0, 0), data["day_length"])
-        stats = dict(data["stats"])
-        stats["death_causes"] = tuple(stats["death_causes"])
-        tracker.stats = EpisodeStats(**stats)
+        tracker.stats = EpisodeStats.from_dict(data["stats"])
         tracker._visited = {tuple(tile) for tile in data["visited"]}
         tracker._wellbeing_sum = data["wellbeing_sum"]
         tracker._updates = data["updates"]

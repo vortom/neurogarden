@@ -74,6 +74,9 @@ export function applySpectatorMessage(garden: Garden, message: ServerMessage): b
       return true;
     case "replay":
       garden.ghost = message.payload;
+      // Each stream tells its own story: the ghost's lines follow, and when it is over the
+      // server sends the living garden's recent lines again.
+      garden.chronicle = [];
       if (!message.payload.done) garden.frame = null; // the ghost's first frame is still to come
       return true;
     case "error":
@@ -89,7 +92,8 @@ export function focusId(garden: Garden): number {
   const mine = garden.me.joined?.agent_id;
   if (mine !== undefined) return mine;
   const ghost = garden.ghost;
-  if (ghost === null || garden.frame === null) return -1;
+  // A ghost that has faded leaves the living garden alone, even if its owner flies again.
+  if (ghost === null || ghost.done || garden.frame === null) return -1;
   const fly = garden.frame.agents.find((a: AgentView) => a.owner === ghost.owner && a.lineage === ghost.lineage);
   return fly?.agent_id ?? -1;
 }

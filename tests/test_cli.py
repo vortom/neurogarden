@@ -249,7 +249,7 @@ def test_replay_shows_a_life_frame_by_frame(garden, capsys):
     argv = ["replay", "--archive", path, "--owner", "alice", "--life", "1", "--ascii"]
     assert cli.main([*argv, "--frames", "3", "--fps", "1000"]) == 0
     out = capsys.readouterr().out
-    assert out.count("ghost: alice's") == 3 and "tick 1 of" in out or "tick 0 of" in out
+    assert out.count("ghost: alice's") == 3 and ("tick 1 of" in out or "tick 0 of" in out)
     assert cli.main([*argv, "--fps", "1000"]) == 0  # the whole life, to its last frame
     assert "dies of starvation" in capsys.readouterr().out
     assert cli.main(["replay", "--archive", path, "--owner", "alice", "--life", "7"]) == 1
@@ -305,3 +305,36 @@ def test_serve_resumes_an_archive_and_refuses_another_seed(garden, capsys, monke
     assert "drosoville (seed 3)" in out and f"resumed at tick {ticks}" in out
     assert "2 lives so far" in out and f"archive: {path}" in out
     assert "seed 3), not drosoville (seed 9)" in err
+
+
+def test_replay_refuses_a_non_positive_fps(garden, capsys):
+    path, _ = garden
+    argv = ["replay", "--archive", path, "--owner", "alice", "--life", "1", "--fps", "0"]
+    assert cli.main(argv) == 1
+    assert "fps must be positive" in capsys.readouterr().err
+
+
+def test_archive_commands_refuse_files_that_are_not_archives(tmp_path, capsys):
+    import sqlite3
+
+    notes = tmp_path / "notes.db"
+    notes.write_text("not sqlite at all")
+    empty = tmp_path / "empty.db"
+    sqlite3.connect(str(empty)).close()
+    for path in (notes, empty, tmp_path):
+        assert cli.main(["lives", "--archive", str(path)]) == 1
+    errors = capsys.readouterr().err.splitlines()
+    assert len(errors) == 3 and all(line.startswith("neurogarden: ") for line in errors)
+    assert "not a NeuroGarden archive" in errors[0] and "holds no world" in errors[1]
+    assert (
+        cli.main(["serve", "--archive", str(tmp_path / "no" / "dir" / "g.db"), "--port", "0"]) == 1
+    )
+    assert "cannot open" in capsys.readouterr().err
+
+
+def test_export_refuses_an_unwritable_output_path(garden, tmp_path, capsys):
+    path, _ = garden
+    out = str(tmp_path / "no" / "such" / "dir" / "life.npz")
+    argv = ["export", "--archive", path, "--owner", "alice", "--life", "1", "--out", out]
+    assert cli.main(argv) == 1
+    assert capsys.readouterr().err.startswith("neurogarden: ")

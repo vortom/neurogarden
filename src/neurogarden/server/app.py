@@ -48,7 +48,9 @@ def check_identity(info: WorldInfo, config: ServerConfig, path: str) -> None:
             f"{path} was written under rules_version {info.rules_version}; this engine is "
             f"{RULES_VERSION} — resume it with the older neurogarden, or start a new archive"
         )
-    if (info.map_name, info.seed) != (config.map, config.seed):
+    # A world archived by a bare WorldRunner has no seed on record: nothing to disagree with.
+    other_seed = info.seed is not None and info.seed != config.seed
+    if info.map_name != config.map or other_seed:
         raise ArchiveError(
             f"{path} holds {info.map_name} (seed {info.seed}), not {config.map} "
             f"(seed {config.seed}); pass --archive another.db for a new world"

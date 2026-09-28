@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hmac
 import logging
 
@@ -30,6 +29,8 @@ CLOSE_UNSUPPORTED_VERSION = 4001
 CLOSE_UNAUTHORIZED = 4002
 CLOSE_HELLO_REQUIRED = 4003
 CLOSE_SUPERSEDED = 4004
+_REBUILD_STRETCH = 50  # engine steps a ghost replays before yielding to the live world
+REPLAY_INTERVAL = 1.0  # seconds a spectator waits between one ghost and the next
 _CLOSE_CODES = {
     "malformed": CLOSE_MALFORMED,
     "unsupported_version": CLOSE_UNSUPPORTED_VERSION,
@@ -43,7 +44,8 @@ class Gateway:
         self.runner = runner
         self.token = token
         self.hello_timeout = hello_timeout
-        self._ghosts: dict[int, asyncio.Task] = {}  # id(port) -> the replay it is watching
+        self._ghosts: dict[RemotePort, asyncio.Task] = {}  # the replay a spectator is watching
+        self._last_replay: dict[RemotePort, float] = {}  # when each one last asked for a ghost
 
     async def _fail(self, connection, code: str, message: str) -> None:
         """The full story goes in the error payload; the close reason is what fits in a frame."""
@@ -106,6 +108,7 @@ class Gateway:
                 self.runner.detach(port)
             else:
                 await self._stop_ghost(port)
+                self._last_replay.pop(port, None)
                 self.runner.remove_spectator(port)
             port.closing = True
             port.mailbox.close()
@@ -160,6 +163,13 @@ class Gateway:
     # --- ghosts: archived lives replayed to one spectator --------------------------------
 
     async def _start_ghost(self, port: RemotePort, request) -> None:
+        # Starting a ghost rebuilds a world (up to snapshot_every engine steps): one a second
+        # per spectator is plenty for a person and too few for a client out to stall the world.
+        now = self.runner.clock()
+        if now - self._last_replay.get(port, -REPLAY_INTERVAL) < REPLAY_INTERVAL:
+            port.deliver(error_message("replay_busy", "one replay a second, please"))
+            return
+        self._last_replay[port] = now
         await self._stop_ghost(port)
         life = self.runner.archive.life(request.owner, request.lineage)
         if life is None:
@@ -169,39 +179,57 @@ class Gateway:
             self._back_to_the_living(port)
             return
         self.runner.remove_spectator(port)  # a ghost watcher gets no live frames meanwhile
-        self._ghosts[id(port)] = asyncio.get_running_loop().create_task(
+        self._ghosts[port] = asyncio.get_running_loop().create_task(
             self._haunt(port, life, request.speed)
         )
 
     async def _stop_ghost(self, port: RemotePort) -> None:
-        task = self._ghosts.pop(id(port), None)
+        task = self._ghosts.pop(port, None)
         if task is None:
             return
         task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
+        try:
             await task
+        except asyncio.CancelledError:
+            if asyncio.current_task().cancelling():
+                raise  # that one was aimed at us (shutdown), not at the ghost
 
     def _back_to_the_living(self, port: RemotePort) -> None:
         """A spectator whose ghost is over (or never was) watches the live world again."""
         if not port.closing and port not in self.runner.spectators:
             self.runner.add_spectator(port)
 
+    async def _world_before(self, tick: int):
+        """`history.world_at`, letting the live world tick in between stretches of replay."""
+        steps = history.rebuild_steps(self.runner.archive, tick)
+        rebuilt = next(steps)
+        for count, _ in enumerate(steps):
+            if count % _REBUILD_STRETCH == 0:
+                await asyncio.sleep(0)
+        return rebuilt.world
+
     async def _haunt(self, port: RemotePort, life, speed: float) -> None:
         """Stream one archived life as frames, at `speed` × the world's own pace."""
         runner = self.runner
+        archive = runner.archive
         period = 1.0 / (runner.tps * speed)
-        last = None if life.died_tick is None else life.died_tick + 1  # through its last frame
+        end = archive.life_end(life)  # fixed now: a life still going is not chased
         try:
             port.deliver(frames.world_message(runner.world, runner.map_name))
             port.deliver(frames.replay_message(life, speed, done=False))
-            roster = GhostRoster(runner.archive.lives())
+            roster = GhostRoster(archive.lives())
             said: dict[int, list[str]] = {}  # the naturalist's lines of those days, by tick
-            until = runner.archive.next_tick() if last is None else last
-            for tick, text in runner.archive.chronicle_between(life.born_tick, until):
+            for tick, text in archive.chronicle_between(life.born_tick, end):
                 said.setdefault(tick, []).append(text)
-            for moment in history.playback(runner.archive, life.born_tick, last):
-                events = moment.result.events
-                port.deliver(frames.frame_message(moment.world, roster, events, moment.tick, {}))
+            world = await self._world_before(life.born_tick)
+            for moment in history.playback(archive, life.born_tick, end, world):
+                # A reader slower than the ghost would only have this frame replaced by the
+                # next (latest wins), so it is not even built — except the last one, which
+                # every watcher must see: the fly as it ended.
+                if moment.tick == end - 1 or not port.mailbox.holds("frame"):
+                    events = moment.result.events
+                    frame = frames.frame_message(moment.world, roster, events, moment.tick, {})
+                    port.deliver(frame)
                 for text in said.get(moment.tick, ()):
                     port.deliver(frames.chronicle_message(moment.tick, text))
                 await asyncio.sleep(period)
@@ -213,5 +241,6 @@ class Gateway:
             log.exception("replay of %s #%d crashed", life.owner, life.lineage)
             port.deliver(error_message("replay_failed", "the replay could not be played"))
         finally:
-            self._ghosts.pop(id(port), None)
+            if self._ghosts.get(port) is asyncio.current_task():
+                del self._ghosts[port]
         self._back_to_the_living(port)  # not reached when cancelled: a new ghost, or goodbye

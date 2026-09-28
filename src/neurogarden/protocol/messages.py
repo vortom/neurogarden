@@ -19,6 +19,7 @@ OWNER_PATTERN = r"^[A-Za-z0-9_.-]{1,64}$"
 TEXT_PATTERN = r"^[^\x00-\x1f\x7f]*$"  # no control characters, no escape sequences
 SAY_MAX = 40
 REPLAY_SPEED, REPLAY_SPEED_MIN, REPLAY_SPEED_MAX = 4.0, 0.25, 64.0
+LINEAGE_MAX = 2**31 - 1  # more lives than any owner will have; fits every integer column
 
 
 class Model(BaseModel):
@@ -93,7 +94,7 @@ class Replay(Model):
     """A spectator asks to watch an archived life again: a ghost, at `speed` × the world's pace."""
 
     owner: str = Field(pattern=OWNER_PATTERN)
-    lineage: int = Field(ge=1)
+    lineage: int = Field(ge=1, le=LINEAGE_MAX)
     speed: float = Field(default=REPLAY_SPEED, ge=REPLAY_SPEED_MIN, le=REPLAY_SPEED_MAX)
 
 

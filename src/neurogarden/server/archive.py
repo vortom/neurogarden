@@ -13,11 +13,17 @@ import json
 import os
 import sqlite3
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 from neurogarden.dojo.stats import EpisodeStats
 from neurogarden.engine.config import RULES_VERSION, Config
+
+try:
+    import fcntl  # POSIX: one writer per archive file (see Archive.open)
+except ImportError:  # pragma: no cover - Windows has no fcntl; two servers on one file collide
+    fcntl = None
 
 ARCHIVE_VERSION = 1
 MEMORY = ":memory:"  # a world that lives only as long as its process
@@ -123,16 +129,8 @@ class TickInputs:
         )
 
 
-def _stats_to_json(stats: EpisodeStats) -> str:
-    return json.dumps(asdict(stats) | {"death_causes": list(stats.death_causes)})
-
-
 def _stats_from_json(text: str | None) -> EpisodeStats | None:
-    if text is None:
-        return None
-    data = json.loads(text)
-    data["death_causes"] = tuple(data["death_causes"])
-    return EpisodeStats(**data)
+    return None if text is None else EpisodeStats.from_dict(json.loads(text))
 
 
 def _life(row) -> Life:
@@ -153,9 +151,27 @@ def _life(row) -> Life:
 _LIFE_COLUMNS = "agent_id, owner, lineage, name, body, born_tick, died_tick, causes, stats"
 
 
+def _lock(path: str):
+    """Hold `<path>.lock` for as long as the archive is open: a second server on the same file
+    would resume the first one's world and collide with it tick by tick."""
+    if fcntl is None:
+        return None
+    try:
+        lock = open(f"{path}.lock", "w")  # noqa: SIM115 - held until Archive.close
+    except OSError as err:  # no such directory, no permission
+        raise ArchiveError(f"cannot open {path}: {err.strerror}") from None
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        lock.close()
+        raise ArchiveError(f"{path} is already being served by another neurogarden") from None
+    return lock
+
+
 class Archive:
-    def __init__(self, connection: sqlite3.Connection, path: str) -> None:
+    def __init__(self, connection: sqlite3.Connection, path: str, lock=None) -> None:
         self._db = connection
+        self._lock = lock
         self.path = path
 
     # --- opening ----------------------------------------------------------------------
@@ -163,24 +179,38 @@ class Archive:
     @classmethod
     def open(cls, path: str = MEMORY, *, readonly: bool = False) -> Archive:
         """Open (and, unless read-only, create) the archive at `path`; `:memory:` for none."""
-        if readonly:
-            if path == MEMORY or not os.path.exists(path):
-                raise ArchiveError(f"no archive at {path}")
-            uri = f"file:{os.path.abspath(path)}?mode=ro"
-            db = sqlite3.connect(uri, uri=True, isolation_level=None)
-        else:
-            db = sqlite3.connect(path, isolation_level=None)  # explicit BEGIN/COMMIT below
-            db.execute("PRAGMA journal_mode=WAL")
-            db.execute("PRAGMA synchronous=NORMAL")
-            db.executescript(_SCHEMA)
-        archive = cls(db, path)
-        info = archive.world_info  # a foreign archive is refused before anything is written
+        lock = None
+        try:
+            if readonly:
+                if path == MEMORY or not os.path.exists(path):
+                    raise ArchiveError(f"no archive at {path}")
+                uri = f"{Path(path).resolve().as_uri()}?mode=ro"
+                db = sqlite3.connect(uri, uri=True, isolation_level=None)
+            else:
+                lock = _lock(path) if path != MEMORY else None
+                db = sqlite3.connect(path, isolation_level=None)  # explicit BEGIN/COMMIT below
+                db.execute("PRAGMA journal_mode=WAL")
+                db.execute("PRAGMA synchronous=NORMAL")
+                db.executescript(_SCHEMA)
+        except sqlite3.Error as err:  # an unwritable directory, a file that is not a database
+            if lock is not None:
+                lock.close()
+            raise ArchiveError(f"cannot open {path}: {err}") from None
+        archive = cls(db, path, lock)
+        try:  # a foreign archive is refused before anything is written
+            info = archive.world_info
+        except sqlite3.DatabaseError as err:
+            archive.close()
+            raise ArchiveError(f"{path} is not a NeuroGarden archive: {err}") from None
         if info is not None and info.archive_version != ARCHIVE_VERSION:
-            db.close()
+            archive.close()
             raise ArchiveError(
                 f"{path} is an archive of version {info.archive_version}; "
                 f"this neurogarden writes version {ARCHIVE_VERSION}"
             )
+        if info is None and readonly:  # a database, but not one of ours (or not yet)
+            archive.close()
+            raise ArchiveError(f"{path} holds no world")
         return archive
 
     @classmethod
@@ -188,10 +218,7 @@ class Archive:
         """What world a file holds, without creating the file. None for nothing there."""
         if path == MEMORY or not os.path.exists(path):
             return None
-        try:
-            archive = cls.open(path, readonly=True)
-        except sqlite3.DatabaseError as err:
-            raise ArchiveError(f"{path} is not a NeuroGarden archive: {err}") from None
+        archive = cls.open(path, readonly=True)  # raises for a file that is not an archive
         try:
             return archive.world_info
         finally:
@@ -199,6 +226,9 @@ class Archive:
 
     def close(self) -> None:
         self._db.close()
+        if self._lock is not None:
+            self._lock.close()  # closing the file releases the lock
+            self._lock = None
 
     # --- the world ------------------------------------------------------------------------
 
@@ -280,7 +310,7 @@ class Archive:
     def died(self, agent_id: int, died_tick: int, causes: list[str], stats: EpisodeStats) -> None:
         self._db.execute(
             "UPDATE lives SET died_tick = ?, causes = ?, stats = ? WHERE agent_id = ?",
-            (died_tick, json.dumps(list(causes)), _stats_to_json(stats), agent_id),
+            (died_tick, json.dumps(list(causes)), json.dumps(stats.to_dict()), agent_id),
         )
 
     def note(self, tick: int, text: str) -> None:
@@ -320,6 +350,13 @@ class Archive:
             f"SELECT {_LIFE_COLUMNS} FROM lives WHERE owner = ? AND lineage = ?", (owner, lineage)
         ).fetchone()
         return None if row is None else _life(row)
+
+    def life_end(self, life: Life) -> int:
+        """One past the last recorded tick of a life: its last frame, or what is archived so far.
+
+        The bound is fixed when asked, so replaying a life still going ends where the archive
+        stood, instead of chasing a world that keeps writing."""
+        return self.next_tick() if life.died_tick is None else life.died_tick + 1
 
     def recent_chronicle(self, lines: int) -> list[tuple[int, str]]:
         rows = self._db.execute(

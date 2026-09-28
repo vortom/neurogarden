@@ -42,8 +42,8 @@ def _add_connection_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--token", default="dev")
 
 
-def _add_archive_arg(parser: argparse.ArgumentParser, help: str) -> None:
-    parser.add_argument("--archive", default=DEFAULT_ARCHIVE, metavar="PATH", help=help)
+def _add_archive_arg(parser: argparse.ArgumentParser, what: str) -> None:
+    parser.add_argument("--archive", default=DEFAULT_ARCHIVE, metavar="PATH", help=what)
 
 
 def _add_life_args(parser: argparse.ArgumentParser) -> None:
@@ -110,7 +110,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_life_args(export_cmd)
     export_cmd.add_argument("--out", required=True, metavar="FILE.npz")
 
-    verify_cmd = commands.add_parser("verify", help="re-run an archive's history, check every hash")
+    verify_cmd = commands.add_parser(
+        "verify", help="re-run an archive's history from its first snapshot, check every hash"
+    )
     _add_archive_arg(verify_cmd, "the world's file")
     return parser
 
@@ -137,11 +139,11 @@ def cmd_serve(args) -> int:
     try:
         held = Archive.peek(args.archive)  # an existing world says what it is
         map_name = args.map if args.map is not None else (held.map_name if held else "drosoville")
-        seed = args.seed if args.seed is not None else (held.seed if held else 0)
+        seed = args.seed if args.seed is not None else (held.seed if held else None)
         npcs = [parse_npc(spec) for spec in (args.npc or ["scripted:1"])]
         config = ServerConfig(
             map=map_name,
-            seed=seed if seed is not None else 0,
+            seed=seed if seed is not None else 0,  # an archive without a seed accepts any
             tps=args.tps,
             host=args.host,
             port=args.port,
@@ -267,11 +269,6 @@ def _find_life(archive: Archive, owner: str, lineage: int) -> Life:
     return life
 
 
-def _last_tick(life: Life) -> int | None:
-    """One past the last recorded tick of a life; None while it is still going."""
-    return None if life.died_tick is None else life.died_tick + 1
-
-
 def cmd_lives(args) -> int:
     try:
         archive = _open_archive(args.archive)
@@ -304,16 +301,9 @@ def cmd_lives(args) -> int:
     return 0
 
 
-def _ghost_frame(moment: history.Moment, roster, map_name: str):
-    """What a spectator would have been sent for this tick: the map and the frame."""
-    world_map = server_frames.world_message(moment.world, map_name).payload
-    frame = server_frames.frame_message(
-        moment.world, roster, moment.result.events, moment.tick, {}
-    ).payload
-    return world_map, frame
-
-
 def cmd_replay(args) -> int:
+    if args.fps <= 0:
+        return _refuse(ValueError("--fps must be positive"))
     try:
         archive = _open_archive(args.archive)
     except ValueError as err:
@@ -322,23 +312,30 @@ def cmd_replay(args) -> int:
         life = _find_life(archive, args.owner, args.life)
         info = archive.world_info
         roster = GhostRoster(archive.lives())
-        end = life.died_tick if life.died_tick is not None else archive.next_tick() - 1
+        end = archive.life_end(life)
+        start = history.world_at(archive, life.born_tick).world
+        world_map = server_frames.world_message(start, info.map_name).payload  # never changes
+        told = archive.chronicle_between(life.born_tick, end)  # the lines of those days
+        heard = 0  # how many of them the viewer has reached
         shown = 0
-        for moment in history.playback(archive, life.born_tick, _last_tick(life)):
-            world_map, frame = _ghost_frame(moment, roster, info.map_name)
-            lines = archive.chronicle_between(life.born_tick, moment.tick + 1)
-            view = frame_view(world_map, frame, lines)
+        for moment in history.playback(archive, life.born_tick, end, start):
+            while heard < len(told) and told[heard][0] <= moment.tick:
+                heard += 1
+            frame = server_frames.frame_message(
+                moment.world, roster, moment.result.events, moment.tick, {}
+            ).payload
+            view = frame_view(world_map, frame, told[:heard])
             text = render_view(view, focus=life.agent_id, ascii=args.ascii, roster=True)
             sys.stdout.write(
                 f"{_HOME_AND_CLEAR}{text}\n  ghost: {life.owner}'s {life.name} (#{life.lineage})"
-                f" · tick {moment.tick} of {life.born_tick}–{end}\n"
+                f" · tick {moment.tick} of {life.born_tick}–{end - 1}\n"
             )
             sys.stdout.flush()
             shown += 1
             if args.frames is not None and shown >= args.frames:
                 break
             time.sleep(1.0 / args.fps)
-    except ValueError as err:
+    except (ValueError, OSError) as err:  # no such life, or the terminal went away
         return _refuse(err)
     except KeyboardInterrupt:
         pass
@@ -358,7 +355,7 @@ def export_life(archive: Archive, life: Life) -> dict[str, np.ndarray]:
     actions: list[int] = []
     ticks: list[int] = []
     previous = None
-    for moment in history.playback(archive, life.born_tick, _last_tick(life)):
+    for moment in history.playback(archive, life.born_tick, archive.life_end(life)):
         if previous is not None:
             for name, values in previous.items():
                 channels[name].append(values)
@@ -398,7 +395,7 @@ def cmd_export(args) -> int:
             f"wrote {args.out}: {len(arrays['actions'])} steps of "
             f"{life.owner}'s {life.name} (#{life.lineage})"
         )
-    except ValueError as err:
+    except (ValueError, OSError) as err:  # no such life, or nowhere to write the file
         return _refuse(err)
     finally:
         archive.close()

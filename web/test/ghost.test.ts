@@ -114,3 +114,16 @@ describe("a ghost in the garden", () => {
     expect(ghostBanner(info({ done: true, died_tick: null }), 250)).toBe("👻 alice's Dusty Wing #2 has caught up with the living");
   });
 });
+
+describe("a ghost that has faded", () => {
+  it("no longer claims a live fly of the same owner and lineage", () => {
+    const garden = emptyGarden();
+    applySpectatorMessage(garden, { v: 1, type: "replay", payload: info({ done: true }) });
+    applySpectatorMessage(garden, {
+      v: 1,
+      type: "frame",
+      payload: { tick: 9000, day: 8, light: 1000, resources: [], agents: [fly()], events: [], scores: [] },
+    });
+    expect(focusId(garden)).toBe(-1);
+  });
+});

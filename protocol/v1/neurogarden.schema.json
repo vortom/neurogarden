@@ -901,6 +901,7 @@
       "description": "A spectator asks to watch an archived life again: a ghost, at `speed` \u00d7 the world's pace.",
       "properties": {
         "lineage": {
+          "maximum": 2147483647,
           "minimum": 1,
           "title": "Lineage",
           "type": "integer"
