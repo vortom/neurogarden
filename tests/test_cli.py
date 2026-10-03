@@ -362,7 +362,7 @@ def test_evolve_writes_weights_that_join_can_fly(tmp_path, capsys):
     assert "evolving a 3-neuron brain" in printed and "gen   1/1" in printed and "wrote" in printed
     again = str(tmp_path / "again.npz")
     assert cli.main([*argv, "--start", out, "--out", again, "--sigma", "0.3"]) == 0
-    assert "sigma 0.3, learning rate 0.05" in capsys.readouterr().out
+    assert "sigma 0.3, learning rate 0.05, born at dawn" in capsys.readouterr().out
 
     from neurogarden.engine import Config
 

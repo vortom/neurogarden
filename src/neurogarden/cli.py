@@ -196,6 +196,11 @@ def build_parser() -> argparse.ArgumentParser:
     evolve_cmd.add_argument(
         "--start", default=None, metavar="FILE.npz", help="carry on from these weights"
     )
+    evolve_cmd.add_argument(
+        "--any-hour", action=argparse.BooleanOptionalAction, default=None,
+        help="lives begin at any hour of the day, as in a live garden, not at dawn "
+        "(default: no; carrying on: as the start was bred or taught)",
+    )  # fmt: skip
 
     distil_cmd = commands.add_parser(
         "distil", help="teach a connectome brain its readout from the evolved brain"
@@ -638,6 +643,7 @@ def cmd_evolve(args) -> int:
             substeps=setting(args.substeps, "substeps"),
             # the start's own width, whatever its meta says or leaves out
             pooled=args.pooled if args.pooled is not None else getattr(start, "pooled", POOLED),
+            any_hour=bool(setting(args.any_hour, "any_hour")),
             generations=args.generations,
             population=args.population,
             sigma=step(args.sigma, "sigma"),
@@ -687,11 +693,12 @@ def cmd_evolve(args) -> int:
             flush=True,
         )
 
+    born = "at any hour" if config.any_hour else "at dawn"
     print(
         f"evolving {what}: {config.generations} generations of "
         f"{config.population}, {config.episodes} lives each up to {config.max_steps} ticks, "
         f"fitness {config.fitness}, temperature {config.temperature}, sigma {config.sigma}, "
-        f"learning rate {config.learning_rate}"
+        f"learning rate {config.learning_rate}, born {born}"
     )
     out, keep, saved = _keeper(args.out)
     try:
@@ -744,7 +751,7 @@ def cmd_distil(args) -> int:
 
     print(
         f"teaching {what}: {config.rounds} rounds of {config.lives} lives up to "
-        f"{config.max_steps} ticks, {config.pooled} pooled features, "
+        f"{config.max_steps} ticks born at any hour, {config.pooled} pooled features, "
         f"teacher {config.teacher or 'the shipped evolved brain'}"
     )
     out, keep, saved = _keeper(args.out)

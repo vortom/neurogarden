@@ -66,7 +66,7 @@ def test_the_connectome_brain_is_reported_beside_its_control():
         RandomGraphBrain()
     except (ValueError, OSError) as missing:
         pytest.skip(f"needs the cached MaleCNS graph and the shipped weights: {missing}")
-    env = NeuroGardenEnv(max_steps=3000)
+    env = NeuroGardenEnv(max_steps=3000, any_hour=True)  # born at any hour, as in a live garden
     seeds = range(10)
 
     def median(brain_cls):

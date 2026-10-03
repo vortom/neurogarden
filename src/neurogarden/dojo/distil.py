@@ -12,6 +12,9 @@ activity of its descending neurons, so learning from those answers is a softmax 
              every moment the student met, and the readout is fitted again on everything so
              far — a student learns to recover from its own mistakes only by making them
 
+Every life of a lesson begins at some hour of the day, not at dawn (`any_hour`): a fly in a
+live garden hatches whenever its owner joins.
+
 The wiring is never trained, and neither is the input side here (the 25 gains and the network
 gain keep their starting values). What comes out is an ordinary `ConnectomeGenome`: a brain
 to fly, or a start for `evolve --start`, which also breeds the input side.
@@ -58,6 +61,10 @@ class DistilConfig:
     # The input side is not learned here; these set it (evolution can move it afterwards).
     gain: float = INITIAL_GAIN
     input_gain: float = 1.0
+    # Lives begin at any hour of the day, as they do in a live garden. Taught on dawn births
+    # alone, the shipped lesson made a fly that lived 2750 ticks born at dawn and 750 born at
+    # any other hour: its age and the daylight had never come apart.
+    any_hour: bool = True
 
     def __post_init__(self) -> None:
         counts = (self.rounds, self.lives, self.max_steps, self.min_synapses, self.substeps)
@@ -124,6 +131,7 @@ class Distilled:
             "generations": 0,
             "total_generations": 0,  # none bred yet: `evolve --start` counts from here
             "parent": None,
+            "any_hour": self.config.any_hour,  # `evolve --start` breeds on as it was taught
             "distilled": {
                 **{name: settings[name] for name in _META_FIELDS},
                 "rounds_done": len(self.history),
@@ -147,7 +155,9 @@ _teacher: EvolvedBrain | None = None
 def _setup(config: DistilConfig) -> None:
     """Worker initialiser: one environment, one graph and one teacher per process."""
     global _env, _trainable, _teacher
-    _env = NeuroGardenEnv(map=config.map, config=Config(), max_steps=config.max_steps)
+    _env = NeuroGardenEnv(
+        map=config.map, config=Config(), max_steps=config.max_steps, any_hour=config.any_hour
+    )
     _trainable = config.trainable()
     _teacher = EvolvedBrain(path=config.teacher)
 

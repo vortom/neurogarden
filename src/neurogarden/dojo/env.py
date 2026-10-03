@@ -12,6 +12,7 @@ from neurogarden.engine import maps
 from neurogarden.engine.body import action_names, observation_spec
 from neurogarden.engine.clock import day_number
 from neurogarden.engine.config import Config
+from neurogarden.engine.rng import SplitMix64
 from neurogarden.engine.tiles import parse_map
 from neurogarden.engine.world import World
 
@@ -20,6 +21,13 @@ from .rewards import BodyState, RewardFn, resolve
 from .stats import StatsTracker
 
 BODY = "fly"
+_BIRTH_XOR = 0xB1F7_0DA7_5EED_C10C  # decorrelates the hour of birth from the world's own draws
+
+
+def birth_tick(seed: int, day_length: int) -> int:
+    """The tick a fly hatches at when a life may begin at any hour: a fixed function of the
+    world seed, so a life is still reproducible from its seed alone."""
+    return SplitMix64(seed ^ _BIRTH_XOR).randbelow(day_length)
 
 
 class NeuroGardenEnv(gymnasium.Env):
@@ -32,7 +40,13 @@ class NeuroGardenEnv(gymnasium.Env):
         reward: str | RewardFn = "wellbeing",
         max_steps: int = 6000,
         render_mode: str | None = None,
+        any_hour: bool = False,
     ) -> None:
+        """`any_hour=False`: every life begins at world tick 0, at dawn. `any_hour=True`: the
+        world first runs empty until `birth_tick(seed)`, so the fly is born at some hour of
+        the first day — as in a live garden, where a fly hatches whenever its owner joins. A
+        brain that only ever met dawn births has age and daylight locked together in
+        everything it learned, and may be lost when they come apart."""
         if render_mode is not None and render_mode not in self.metadata["render_modes"]:
             raise ValueError(f"unsupported render_mode {render_mode!r}")
         if max_steps <= 0:
@@ -42,6 +56,7 @@ class NeuroGardenEnv(gymnasium.Env):
         self._reward = resolve(reward)
         self.max_steps = max_steps
         self.render_mode = render_mode
+        self.any_hour = any_hour
         self.observation_space = spaces.Dict(
             {
                 name: spaces.Box(
@@ -73,6 +88,9 @@ class NeuroGardenEnv(gymnasium.Env):
         super().reset(seed=seed)
         world_seed = seed if seed is not None else int(self.np_random.integers(0, 2**63 - 1))
         self.world = World.from_map(self._map_text, self.config, world_seed)
+        if self.any_hour:
+            for _ in range(birth_tick(world_seed, self.config.day_length)):
+                self.world.step({})
         self._fly = self.world.spawn(body=BODY)
         agent = self.world.state.agents[self._fly]
         self._tracker = StatsTracker(self._fly, (agent.x, agent.y), self.config.day_length)

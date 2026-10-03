@@ -63,6 +63,7 @@ class EvolveConfig:
     control: int | None = None  # connectome only: breed on the row-shuffled graph of this seed
     substeps: int = DEFAULT_SUBSTEPS  # connectome only: network updates per world tick
     pooled: int = POOLED  # connectome only: features the readout sees
+    any_hour: bool = False  # lives begin at any hour of the day, not at dawn (see dojo.env)
 
     def __post_init__(self) -> None:
         if self.population < 2 or self.population % 2:
@@ -114,7 +115,7 @@ class Generation:
 
 _META_FIELDS = (
     "population", "sigma", "learning_rate", "episodes", "max_steps", "seed", "fitness",
-    "temperature", "init_scale", "map",
+    "temperature", "init_scale", "map", "any_hour",
 )  # fmt: skip
 
 
@@ -153,7 +154,9 @@ _fitness: Fitness = fitness_lifespan
 def _setup(config: EvolveConfig) -> None:
     """Worker initialiser: one environment and one trainable (its graph, if any) per process."""
     global _env, _trainable, _fitness
-    _env = NeuroGardenEnv(map=config.map, config=Config(), max_steps=config.max_steps)
+    _env = NeuroGardenEnv(
+        map=config.map, config=Config(), max_steps=config.max_steps, any_hour=config.any_hour
+    )
     _trainable = config.trainable()
     _fitness = FITNESSES[config.fitness]
 

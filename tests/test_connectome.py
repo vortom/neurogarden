@@ -500,7 +500,7 @@ def test_a_lesson_is_what_it_says_tick_for_tick(cache):
     assert [lifespan] == taught.history[0].lifespans and len(seen) == len(said) == lifespan
     # Live the life again: every moment written down is what the readout saw then, and what
     # the teacher said of that same moment; and the life is the teacher's own.
-    env = NeuroGardenEnv(max_steps=config.max_steps)
+    env = NeuroGardenEnv(max_steps=config.max_steps, any_hour=True)  # as a lesson's lives are
     teacher, student = EvolvedBrain(), config.trainable().brain(blank)
     now, _ = env.reset(seed=world)
     teacher.reset(brain_seed(world))
@@ -538,6 +538,7 @@ def test_distilling_teaches_the_readout_round_by_round(tmp_path, cache):
     meta = first.meta
     assert (meta["brain"], meta["graph"], meta["temperature"]) == ("connectome", "full", 0.5)
     assert meta["digest"] == data.load("full", 1).digest and meta["total_generations"] == 0
+    assert meta["any_hour"] is True  # taught on lives that begin at any hour, as live ones do
     told = meta["distilled"]
     assert (told["rounds_done"], told["teacher"], told["ticks"]) == (
         2,
@@ -555,6 +556,7 @@ def test_distilling_teaches_the_readout_round_by_round(tmp_path, cache):
         patch.setattr(np.random, "default_rng", lambda seed: asked.append(seed) or numpy_rng(seed))
         bred = evolve(EvolveConfig(**CONNECTOME), start=genome, parent=meta)
     assert bred.meta["total_generations"] == 2 and bred.meta["parent"]["distilled"] == told
+    assert bred.meta["any_hour"] is False  # the library takes what its config says…
     assert [0, 0, 2] in asked  # not the lesson's worlds again: the seed is mixed with its rounds
     seen = []
     distil(DistilConfig(**LESSON), on_round=seen.append, checkpoint=lambda r: seen.append(r.meta))
@@ -731,17 +733,19 @@ def test_evolve_and_flock_commands_on_a_cached_graph(tmp_path, cache, capsys):
     carry_on = ["evolve", "--start", taught + ".npz", "--out", bred, "--generations", "1"]
     carry_on += ["--population", "2", "--episodes", "1", "--max-steps", "20", "--workers", "1"]
     assert cli.main(carry_on) == 0
-    # A taught brain is carried on in small steps: the usual ones would undo the lesson.
-    assert "sigma 0.01, learning rate 0.0005" in capsys.readouterr().out
+    # A taught brain is carried on in small steps (the usual ones would undo the lesson) and
+    # on lives born at any hour, as it was taught.
+    printed = capsys.readouterr().out
+    assert "sigma 0.01, learning rate 0.0005, born at any hour" in printed
     with np.load(bred) as file:
         meta = json.loads(str(file["meta"]))
     assert meta["pooled"] == 16 and meta["parent"]["distilled"]["rounds_done"] == 2
-    assert (meta["sigma"], meta["learning_rate"]) == (0.01, 0.0005)
+    assert (meta["sigma"], meta["learning_rate"], meta["any_hour"]) == (0.01, 0.0005, True)
     further = [*carry_on[:2], bred, *carry_on[3:]]  # and what was bred from it keeps them
     assert cli.main(further) == 0
     assert "sigma 0.01, learning rate 0.0005" in capsys.readouterr().out
-    assert cli.main([*carry_on, "--sigma", "0.2"]) == 0  # unless told otherwise
-    assert "sigma 0.2, learning rate 0.0005" in capsys.readouterr().out
+    assert cli.main([*carry_on, "--sigma", "0.2", "--no-any-hour"]) == 0  # unless told otherwise
+    assert "sigma 0.2, learning rate 0.0005, born at dawn" in capsys.readouterr().out
     assert cli.main([*lesson, "--teacher", out]) == 1  # a connectome brain is no teacher
     assert "not an evolved brain" in capsys.readouterr().err
     shuffled = str(tmp_path / "mine.npz")  # the control, bred under a name of its own

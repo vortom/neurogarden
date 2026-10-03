@@ -5,6 +5,7 @@ from gymnasium.utils.env_checker import check_env
 
 import neurogarden.dojo as dojo
 from neurogarden.dojo import NeuroGardenEnv, TinyObservation
+from neurogarden.dojo.env import birth_tick
 from neurogarden.engine import Action, Config, MapError, World, maps
 
 TINY = """
@@ -61,6 +62,29 @@ def test_reset_seed_is_the_world_seed():
     twin = World.from_map(maps.load("drosoville"), seed=123)
     twin.spawn()
     assert env.world.state_hash() == twin.state_hash()
+
+
+def test_a_life_can_begin_at_any_hour_of_the_day():
+    env = NeuroGardenEnv(any_hour=True, max_steps=5)
+    day = env.config.day_length
+    born = []
+    for seed in range(12):
+        observation, info = env.reset(seed=seed)
+        assert info["tick"] == birth_tick(seed, day) < day  # the same hour for the same seed
+        assert observation["body"][4] == 0  # and a newborn all the same
+        born.append(info["tick"])
+    assert len(set(born)) > 8 and min(born) < day // 3 and max(born) > 2 * day // 3  # spread out
+    # The world it is born into is the seed's own world, a part of a day older.
+    twin = World.from_map(maps.load("drosoville"), seed=5)
+    for _ in range(birth_tick(5, day)):
+        twin.step({})
+    twin.spawn()
+    env.reset(seed=5)
+    assert env.world.state_hash() == twin.state_hash()
+    # A life keeps its own count: age and the stats start at the birth, not at the world's dawn.
+    _, _, _, truncated, info = [env.step(0) for _ in range(5)][-1]
+    assert truncated and info["stats"].lifespan == 5 and info["tick"] == birth_tick(5, day) + 5
+    assert NeuroGardenEnv().reset(seed=5)[1]["tick"] == 0  # dawn, unless asked otherwise
 
 
 def test_death_terminates_and_time_limit_truncates():
