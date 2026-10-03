@@ -142,6 +142,58 @@ def softmax(values: np.ndarray) -> np.ndarray:
     return shifted / shifted.sum()
 
 
+def choose(values: np.ndarray, temperature: float, rng: SplitMix64) -> int:
+    """The action for these scores: the highest at temperature 0, else drawn from the softmax
+    with the brain's own generator, so a life is reproducible from its seed."""
+    if temperature <= 0:
+        return int(np.argmax(values))
+    draw = rng.next_u64() / 2**64
+    picked = np.searchsorted(np.cumsum(softmax(values / temperature)), draw)
+    return int(min(picked, len(values) - 1))
+
+
+def sparkline(values: np.ndarray) -> str:
+    """Activities in [-1, 1] as one glyph each: a brain scope in a speech bubble."""
+    levels = np.clip(((values + 1) / 2 * (len(_SPARKS) - 1)).round(), 0, 7).astype(int)
+    return "".join(_SPARKS[level] for level in levels)
+
+
+@dataclass(frozen=True)
+class MlpTrainable:
+    """What the evolution strategy needs to breed the small network (picklable for workers)."""
+
+    hidden: int = DEFAULT_HIDDEN
+    temperature: float = 0.0
+    kind = "evolved"
+
+    @property
+    def size(self) -> int:
+        return Genome.zeros(self.hidden).size
+
+    def initial(self, rng: np.random.Generator, scale: float = 1.0) -> np.ndarray:
+        """Random weights scaled by 1/sqrt(fan-in): scores that already depend on what is seen."""
+        shape = Genome.zeros(self.hidden)
+        w1 = rng.standard_normal(shape.w1.shape) * scale / np.sqrt(TINY_SIZE)
+        w2 = rng.standard_normal(shape.w2.shape) * scale / np.sqrt(self.hidden)
+        return Genome(w1.astype(np.float32), shape.b1, w2.astype(np.float32), shape.b2).to_vector()
+
+    def genome(self, vector: np.ndarray) -> Genome:
+        return Genome.zeros(self.hidden).with_vector(vector)
+
+    def brain(self, vector: np.ndarray) -> EvolvedBrain:
+        return EvolvedBrain(genome=self.genome(vector), temperature=self.temperature)
+
+    def check_start(self, start) -> None:
+        if getattr(start, "hidden", None) != self.hidden:
+            raise ValueError(
+                f"the start has {getattr(start, 'hidden', '?')} hidden neurons, "
+                f"the config {self.hidden}"
+            )
+
+    def describe(self) -> dict:
+        return {"brain": self.kind}
+
+
 class EvolvedBrain:
     """Acts on the scores (drawn at `temperature`, else the highest); `thought()` is a glimpse
     of its hidden layer for spectators.
@@ -174,14 +226,8 @@ class EvolvedBrain:
     def act(self, observation: dict[str, np.ndarray]) -> int:
         features = tiny_features(observation, DEFAULT_AGE_SCALE)
         self._hidden = hidden_activation(self.genome, features)
-        values = output_scores(self.genome, self._hidden)
-        if self.temperature <= 0:
-            return int(np.argmax(values))
-        draw = self._rng.next_u64() / 2**64  # the brain's own stream: reproducible per seed
-        picked = np.searchsorted(np.cumsum(softmax(values / self.temperature)), draw)
-        return int(min(picked, len(values) - 1))
+        return choose(output_scores(self.genome, self._hidden), self.temperature, self._rng)
 
     def thought(self) -> str:
         """The hidden layer as a sparkline: a brain scope in a speech bubble."""
-        levels = np.clip(((self._hidden + 1) / 2 * (len(_SPARKS) - 1)).round(), 0, 7).astype(int)
-        return "".join(_SPARKS[level] for level in levels)
+        return sparkline(self._hidden)
