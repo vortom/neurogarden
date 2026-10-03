@@ -11,7 +11,7 @@ from neurogarden import cli
 from neurogarden.brains import BRAINS, ConnectomeBrain, ConnectomeGenome, EvolvedBrain, Genome
 from neurogarden.brains.base import brain_seed
 from neurogarden.brains.connectome import ConnectomeFlock, ConnectomeTrainable
-from neurogarden.brains.evolved import softmax, weights_kind
+from neurogarden.brains.evolved import default_weights, softmax, weights_kind
 from neurogarden.connectome import data
 from neurogarden.connectome.model import (
     POOLED,
@@ -592,6 +592,25 @@ def test_distil_refuses_what_it_cannot_teach(tmp_path, cache):
     )
     with pytest.raises(ValueError, match="not an evolved brain"):  # a student is no teacher
         distil(DistilConfig(**LESSON, teacher=str(student)))
+
+
+def test_the_shipped_brain_and_its_control_were_taught_alike():
+    """No graph needed: the two files say how they came to be, and the saying must match —
+    a control taught differently would be no control."""
+    real, how = ConnectomeGenome.load(default_weights("connectome-v1.npz"))
+    control, how_control = ConnectomeGenome.load(default_weights("connectome-random-v1.npz"))
+    assert real.size == control.size == 481 and not np.array_equal(real.w, control.w)
+    assert how["control"] is None and how_control["control"] == 1
+    assert how["digest"] != how_control["digest"]
+    same = ("brain", "graph", "min_synapses", "neurons", "connections", "model_version", "pooled")
+    same += ("substeps", "leak", "encoding_seed", "projection_seed", "temperature")
+    assert {key: how[key] for key in same} == {key: how_control[key] for key in same}
+    lesson, lesson_control = how["distilled"], how_control["distilled"]
+    alike = ("rounds", "lives", "max_steps", "seed", "l2", "map", "gain", "input_gain")
+    alike += ("rounds_done", "teacher", "teacher_digest")
+    assert {key: lesson[key] for key in alike} == {key: lesson_control[key] for key in alike}
+    assert lesson["rounds_done"] == lesson["rounds"]  # a whole lesson, not one cut short
+    assert np.array_equal(real.gains, control.gains) and real.gain == control.gain
 
 
 # --- flying many -------------------------------------------------------------------------------

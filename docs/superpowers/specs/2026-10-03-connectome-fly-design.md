@@ -215,6 +215,29 @@ when available; real GPU runs happen on the owner's machine), a spiking model.
   features) fitted better and did not live longer; leak 1.0, six updates a
   tick and other gains were no better than the defaults (gain 2 with doubled
   input fits slightly better).
+- *How they live.* The shipped lesson is eight rounds of eight lives of up to
+  2400 ticks (`distil --rounds 8 --lives 8 --seed 1`, a quarter of an hour on
+  four cores), the same for the real graph and for control 1; every fit
+  settled. The real graph's readout agrees with the teacher on 67% of its
+  134,183 labelled moments (divergence 0.106), the control's on 91% of 145,701
+  (0.012). Ten lives of up to 3000 ticks (the balance guard): median 3000 for
+  both, seven of ten alive at the end for both. Twenty lives of up to 6000
+  ticks (`spikes/connectome_lifespans.py`; the evolved brain's median on this
+  yardstick is 5865, the random brain's 899): real wiring median 3916, mean
+  3711, six alive at the end; control median 5044, mean 4323, eight alive.
+  Paired by seed the real wiring lived longer on nine, the control on eight,
+  three were ties (Wilcoxon p = 0.38): twenty lives do not tell the lifespans
+  apart. How they die does differ: the real-wiring fly dies of thirst as often
+  as of hunger (seven and six of its fourteen deaths, one of both), the
+  control only ever starves.
+- *What may and may not be said.* The fly's wiring is not shown to help. The
+  control learns the lesson far better, and lives at least as long. One lesson
+  per graph is one sample: smaller lessons (five rounds of four lives) gave the
+  real graph medians of 2925 and 2128 over ten lives on two lesson seeds, so
+  the lesson's size and seed move the result as much as the graph does. A
+  comparison worth the name needs many lessons and many more lives — the
+  `bench` of sub-project 7 — and a readout that does not throw away what the
+  descending neurons carry.
 
 **Deviations from the sections above**
 

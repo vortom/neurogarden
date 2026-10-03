@@ -2,10 +2,10 @@
 
 The 25 tiny features drive fixed groups of neurons (mostly sensory), a leaky rate network runs on
 the MaleCNS wiring for a few updates per tick, and a learned readout turns the pooled
-activity of the descending neurons into one of seven actions. What evolution finds is 481
-numbers — input gains, the network's gain, the readout; the wiring is never trained. The
-same brain on a row-shuffled graph is the control. A model inspired by real wiring, not a
-simulated fly.
+activity of the descending neurons into one of seven actions. What is learned is 481
+numbers — input gains, the network's gain, the readout — taught by the evolved brain
+(`dojo.distil`) or bred (`dojo.evolve`); the wiring is never trained. The same brain on a
+row-shuffled graph is the control. A model inspired by real wiring, not a simulated fly.
 """
 
 from __future__ import annotations
@@ -234,7 +234,8 @@ class ConnectomeBrain:
 
 
 class RandomGraphBrain(ConnectomeBrain):
-    """The control: the same brain bred on a wiring whose rows were shuffled."""
+    """The control: the same brain, taught the same lesson on a wiring whose rows were
+    shuffled."""
 
     weights = CONTROL_WEIGHTS
 

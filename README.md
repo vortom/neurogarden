@@ -153,15 +153,37 @@ read out into the seven actions.
 
 What this is, and is not: the *connections* are real. The neuron equation, the
 signs given to transmitters, which neurons "smell fruit" and the readout are
-this project's modelling choices. What is learned — 25 input gains, one network
-gain and a 455-number readout, 481 numbers in all — is found by the same
-evolution that bred the small network; the wiring is never trained. It is a
-model inspired by real wiring, not a simulated fly. To keep that honest, every
-connectome brain ships with a **control**: the same brain bred the same way on
-a graph where each neuron receives another neuron's inputs
-(`connectome-random`) — the senses still reach the descending neurons there,
-by pathways no fly ever had. If the control lives as long, the wiring is not
-what is doing the work — the balance guard prints both.
+this project's modelling choices, and the wiring is never trained. What is
+learned sits around it — 25 input gains, one network gain and a 455-number
+readout, 481 numbers in all. It is a model inspired by real wiring, not a
+simulated fly.
+
+The shipped brain was taught, not bred. Evolving those numbers from nothing
+stalls on this graph: by the tenth generation every candidate drinks, rests
+and starves at tick 899, all scores tie, and the strategy has no slope left.
+The small evolved brain is past that wall and senses the same things, so it
+teaches (`neurogarden distil`): it flies while the connectome network senses
+the same moments, and the readout is fitted to its choices; then the student
+flies and the teacher says what it would have done, round after round. What
+the connectome fly knows about living, evolution found — for the small
+network. The wiring is what that knowledge has to pass through.
+
+To keep that honest, every connectome brain ships with a **control**: the same
+brain taught the same lesson on a graph where each neuron receives another
+neuron's inputs (`connectome-random`) — the senses still reach the descending
+neurons there, by pathways no fly ever had. Twenty lives of up to 6000 ticks,
+the yardstick on which the evolved brain's median is 5865 and the random
+brain's 899: median lifespan **3916** on the real wiring, **5044** on the
+control. Read it as it is. The control copies its teacher far better — its
+readout agrees with the teacher on 91% of moments, the real wiring's on 67% —
+and twenty lives cannot tell the two lifespans apart (the real wiring outlived
+the control on nine seeds, the control on eight, three were ties). Nothing
+here says the fly's own wiring helps: in this model, on this task, a shuffled
+graph passes the senses on to the descending neurons more evenly than the real
+one does. That is what a control is for, and where the next questions are —
+which senses the real pathways carry well, and what a readout that respects
+them would look like. The balance guard (`uv run pytest -m slow`) flies ten
+shorter lives of each and prints both.
 
 ```bash
 uv sync --extra connectome                     # scipy + pyarrow
@@ -180,11 +202,13 @@ network, this brain has a memory: its network state persists from tick to tick
 within a life. Its speech bubble shows sixteen of its pooled descending
 features.
 
-Breed your own readout (`--control SEED` breeds the control instead). The
-weights are written after every generation, so a long run can be stopped:
+Teach your own (`--control SEED` teaches the control instead), and let
+evolution carry on from there if you like: it breeds the input side too, and
+writes the weights after every generation, so a long run can be stopped.
 
 ```bash
-uv run neurogarden evolve --brain connectome --out mine.npz --generations 30 --max-steps 1500
+uv run neurogarden distil --out mine.npz --rounds 8 --lives 8   # the shipped lesson (--seed 1): a quarter of an hour
+uv run neurogarden evolve --start mine.npz --out bred.npz --generations 10 --max-steps 1500
 uv run neurogarden flock --weights mine.npz --count 5       # owners mine-1 … mine-5
 ```
 

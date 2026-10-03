@@ -56,9 +56,9 @@ def test_the_evolved_brain_outlives_the_random_one():
 
 @pytest.mark.slow
 def test_the_connectome_brain_is_reported_beside_its_control():
-    """Real wiring against shuffled wiring, bred alike. The number is the point: it is printed,
-    and only living longer than a random brain is asserted — whether the wiring helps is a
-    result, not a requirement."""
+    """Real wiring against shuffled wiring, taught alike. The number is the point: it is
+    printed, and only living longer than a random brain is asserted — whether the wiring helps
+    is a result, not a requirement."""
     from neurogarden.brains import ConnectomeBrain, RandomGraphBrain
 
     try:
