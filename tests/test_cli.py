@@ -408,3 +408,28 @@ def test_evolve_writes_weights_that_join_can_fly(tmp_path, capsys):
     assert "hidden neurons" in capsys.readouterr().err
     assert cli.main(["evolve", "--out", out, "--population", "3", "--workers", "1"]) == 1
     assert "even" in capsys.readouterr().err
+
+
+def test_an_evolve_cut_short_keeps_its_last_finished_generation(tmp_path, capsys, monkeypatch):
+    from neurogarden.brains import Genome
+
+    real = cli.evolve
+
+    def cut_short(config, checkpoint=None, **rest):
+        def keep(result):
+            checkpoint(result)
+            if len(result.history) == 2:
+                raise KeyboardInterrupt
+
+        return real(config, checkpoint=keep, **rest)
+
+    monkeypatch.setattr(cli, "evolve", cut_short)
+    argv = [
+        "evolve", "--out", str(tmp_path / "cut"), "--generations", "5", "--population", "2",
+        "--episodes", "1", "--max-steps", "20", "--hidden", "3", "--workers", "1", "--seed", "4",
+    ]  # fmt: skip
+    assert cli.main(argv) == 1
+    assert "cut.npz holds generation 2" in capsys.readouterr().err
+    _, meta = Genome.load(tmp_path / "cut.npz")
+    assert meta["generations"] == 2
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["cut.npz"]  # no half-written file

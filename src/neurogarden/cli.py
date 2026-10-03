@@ -602,15 +602,27 @@ def cmd_evolve(args) -> int:
         f"{config.population}, {config.episodes} lives each up to {config.max_steps} ticks, "
         f"fitness {config.fitness}, temperature {config.temperature}"
     )
+    out = Path(args.out)
+    out = out if out.suffix == ".npz" else out.with_name(out.name + ".npz")
+    saved = []
+
+    def keep(result) -> None:
+        """Write the weights so far, whole or not at all: a run cut short keeps its last
+        finished generation."""
+        partial = result.genome.save(out.with_name(out.stem + ".part.npz"), result.meta)
+        partial.replace(out)
+        saved.append(len(result.history))
+
     try:
-        result = evolve(config, start=start, on_generation=report, parent=parent)
-        written = result.genome.save(args.out, result.meta)
+        result = evolve(config, start=start, on_generation=report, parent=parent, checkpoint=keep)
+        keep(result)
     except KeyboardInterrupt:
-        print("stopped; nothing written", file=sys.stderr)
+        kept = f"{out} holds generation {saved[-1]}" if saved else "nothing written"
+        print(f"stopped; {kept}", file=sys.stderr)
         return 1
     except (ValueError, OSError) as err:
         return _refuse(err)
-    print(f"wrote {written}")
+    print(f"wrote {out}")
     return 0
 
 

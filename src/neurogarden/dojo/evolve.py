@@ -210,10 +210,13 @@ def evolve(
     start=None,
     on_generation: Callable[[Generation], None] | None = None,
     parent: dict | None = None,
+    checkpoint: Callable[[Evolved], None] | None = None,
 ) -> Evolved:
     """Run the strategy; returns the weights at the centre after the last generation.
 
     `start` carries on from earlier weights (`parent` is their meta, kept in the file).
+    `checkpoint(result)` is called after every generation with the weights so far, so a
+    long run that is cut short has not been for nothing.
     """
     config = config if config is not None else EvolveConfig()
     rng = np.random.default_rng(config.seed)
@@ -250,6 +253,8 @@ def evolve(
             result.history.append(generation)
             if on_generation is not None:
                 on_generation(generation)
+            if checkpoint is not None:
+                checkpoint(result)
 
     workers = config.workers
     if workers is not None and workers <= 1:
