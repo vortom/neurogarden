@@ -223,10 +223,14 @@ def evolve(
     """
     config = config if config is not None else EvolveConfig()
     # A run that carries on draws on from where its ancestors stopped: the same seed again
-    # would breed on the same worlds and the same noise as its first generations did.
+    # would breed on the same worlds and the same noise as its first generations did — or,
+    # after a lesson (`dojo.distil`), on the very worlds the lesson was flown in.
     behind = 0 if parent is None else int(parent.get("total_generations", 0))
-    rng = np.random.default_rng([config.seed, behind] if behind else config.seed)
+    taught = 0 if parent is None else int((parent.get("distilled") or {}).get("rounds_done", 0))
+    carried = [config.seed, behind, taught] if behind or taught else config.seed
+    rng = np.random.default_rng(carried)
     trainable = config.trainable()
+    trainable.ready()  # refused here, not in every worker
     if start is None:  # all-zero weights would idle every fly to death: start somewhere
         theta = trainable.initial(rng, config.init_scale)
     else:

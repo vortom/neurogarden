@@ -19,10 +19,12 @@ to fly, or a start for `evolve --start`, which also breeds the input side.
 
 from __future__ import annotations
 
+import hashlib
 import time
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 import numpy as np
 
@@ -95,9 +97,11 @@ class Round:
     ticks: int  # labelled moments so far, this round's included
     agreement: float  # how often the fitted student's favourite action is the teacher's
     divergence: float  # mean KL(teacher || student) over the moments, in nats
+    settled: bool  # False: the fit ran out of iterations before it stopped improving
     seconds: float
 
 
+_FIT_STEPS = 2000  # iterations a fit may take; a round reports whether it settled within them
 _META_FIELDS = ("rounds", "lives", "max_steps", "seed", "l2", "map", "gain", "input_gain")
 
 
@@ -107,6 +111,7 @@ class Distilled:
     config: DistilConfig
     history: list[Round] = field(default_factory=list)
     teacher: dict = field(default_factory=dict)  # the teacher's own meta
+    teacher_digest: str = ""  # a hash of the teacher's weights: which teacher, whatever its name
 
     @property
     def meta(self) -> dict:
@@ -122,7 +127,8 @@ class Distilled:
             "distilled": {
                 **{name: settings[name] for name in _META_FIELDS},
                 "rounds_done": len(self.history),
-                "teacher": self.config.teacher or "evolved-v1",
+                "teacher": Path(self.config.teacher).name if self.config.teacher else "evolved-v1",
+                "teacher_digest": self.teacher_digest,
                 "teacher_generations": self.teacher.get("total_generations"),
                 "ticks": 0 if last is None else last.ticks,
                 "agreement": None if last is None else last.agreement,
@@ -172,11 +178,14 @@ def _fly(task: tuple[np.ndarray, int, bool]) -> tuple[np.ndarray, np.ndarray, in
 
 def fit_readout(
     features: np.ndarray, targets: np.ndarray, l2: float
-) -> tuple[np.ndarray, np.ndarray, float, float]:
-    """Softmax regression to soft targets: `(w, b, agreement, divergence)`.
+) -> tuple[np.ndarray, np.ndarray, float, float, bool]:
+    """Softmax regression to soft targets: `(w, b, agreement, divergence, settled)`.
 
     `features @ w + b` are log-probabilities up to a constant: the student that draws from
     their softmax is as close to the teacher's probabilities as a linear readout gets.
+    `l2` holds both `w` and `b`: without it, the bias of an action a sure teacher never
+    takes would run off towards minus infinity. `settled` is False when the fit ran out of
+    iterations; agreement and divergence are measured on the moments it was fitted to.
     """
     require_scipy()
     from scipy.optimize import minimize
@@ -193,19 +202,18 @@ def fit_readout(
         return scores - np.log(np.exp(scores).sum(axis=1, keepdims=True))
 
     def loss(flat: np.ndarray) -> tuple[float, np.ndarray]:
-        w = flat[: width * actions].reshape(width, actions)
         log_p = log_probabilities(flat)
         slope = (np.exp(log_p) - p) / ticks
-        value = -(p * log_p).sum() / ticks + l2 * (w**2).sum()
-        return value, np.concatenate([(x.T @ slope + 2 * l2 * w).ravel(), slope.sum(axis=0)])
+        value = -(p * log_p).sum() / ticks + l2 * (flat**2).sum()
+        return value, np.concatenate([(x.T @ slope).ravel(), slope.sum(axis=0)]) + 2 * l2 * flat
 
     start = np.zeros(width * actions + actions)
-    found = minimize(loss, start, jac=True, method="L-BFGS-B", options={"maxiter": 500})
+    found = minimize(loss, start, jac=True, method="L-BFGS-B", options={"maxiter": _FIT_STEPS})
     log_p = log_probabilities(found.x)
     agreement = float((log_p.argmax(axis=1) == p.argmax(axis=1)).mean())
     divergence = float((p * (np.log(p + 1e-12) - log_p)).sum(axis=1).mean())
     w, b = found.x[: width * actions].reshape(width, actions), found.x[width * actions :]
-    return w, b, agreement, divergence
+    return w, b, agreement, divergence, bool(found.success)
 
 
 # --- the rounds --------------------------------------------------------------------------------
@@ -223,9 +231,15 @@ def distil(
     config = config if config is not None else DistilConfig()
     rng = np.random.default_rng(config.seed)
     trainable = config.trainable()
-    teacher = EvolvedBrain(path=config.teacher)  # refused here, not in a worker
+    trainable.ready()  # a graph or a width that will not do is refused here,
+    teacher = EvolvedBrain(path=config.teacher)  # and so is a teacher: not in a worker
     # The first student knows nothing: round 1 is flown by the teacher anyway.
-    result = Distilled(trainable.blank(), config=config, teacher=dict(teacher.meta))
+    result = Distilled(
+        trainable.blank(),
+        config=config,
+        teacher=dict(teacher.meta),
+        teacher_digest=hashlib.sha256(teacher.genome.to_vector().tobytes()).hexdigest()[:16],
+    )
     features: list[np.ndarray] = []
     targets: list[np.ndarray] = []
 
@@ -237,7 +251,7 @@ def distil(
             lives = list(fly([(vector, seed, index == 0) for seed in seeds]))
             features.extend(seen for seen, _, _ in lives)
             targets.extend(said for _, said, _ in lives)
-            w, b, agreement, divergence = fit_readout(
+            w, b, agreement, divergence, settled = fit_readout(
                 np.concatenate(features), np.concatenate(targets), config.l2
             )
             # The brain draws from softmax(scores / temperature): scale the fit to match.
@@ -254,6 +268,7 @@ def distil(
                 ticks=sum(len(said) for said in targets),
                 agreement=agreement,
                 divergence=divergence,
+                settled=settled,
                 seconds=time.perf_counter() - started,
             )
             result.history.append(entry)

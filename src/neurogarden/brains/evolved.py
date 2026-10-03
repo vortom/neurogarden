@@ -212,6 +212,9 @@ class MlpTrainable:
     def brain(self, vector: np.ndarray) -> EvolvedBrain:
         return EvolvedBrain(genome=self.genome(vector), temperature=self.temperature)
 
+    def ready(self) -> None:
+        """Nothing to load: a small network needs no graph."""
+
     def check_start(self, start, parent: dict | None = None) -> None:
         if getattr(start, "hidden", None) != self.hidden:
             raise ValueError(

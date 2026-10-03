@@ -21,6 +21,7 @@ from neurogarden.brains import BRAINS, WEIGHTED, ConnectomeGenome, Genome
 from neurogarden.brains.evolved import weights_kind
 from neurogarden.connectome import data as connectome_data
 from neurogarden.connectome.data import VARIANTS
+from neurogarden.connectome.model import POOLED
 from neurogarden.dojo.distil import DistilConfig, distil
 from neurogarden.dojo.evolve import BRAINS as BREEDABLE
 from neurogarden.dojo.evolve import EvolveConfig, evolve
@@ -577,7 +578,7 @@ def _writable(target: str) -> None:
 
 
 def _on_graph(trainable) -> str:
-    wiring = trainable.wiring()
+    wiring = trainable.ready()
     control = "" if wiring.control is None else f", random control {wiring.control}"
     return (
         f"a connectome brain on the {wiring.variant} graph ({wiring.n} neurons, "
@@ -619,7 +620,8 @@ def cmd_evolve(args) -> int:
             min_synapses=setting(args.min_synapses, "min_synapses"),
             control=args.control if args.control is not None else inherited.get("control"),
             substeps=setting(args.substeps, "substeps"),
-            pooled=setting(args.pooled, "pooled"),
+            # the start's own width, whatever its meta says or leaves out
+            pooled=args.pooled if args.pooled is not None else getattr(start, "pooled", POOLED),
             generations=args.generations,
             population=args.population,
             sigma=args.sigma,
@@ -715,10 +717,11 @@ def cmd_distil(args) -> int:
 
     def report(entry) -> None:
         lived = statistics.median(entry.lifespans)
+        unsettled = "" if entry.settled else ", fit not settled"
         print(
             f"round {entry.index + 1}/{config.rounds}: the {entry.flown_by} flew, median "
             f"lifespan {lived:.0f} | {entry.ticks} moments, agreement {entry.agreement:.2f}, "
-            f"divergence {entry.divergence:.3f}  ({entry.seconds:.1f}s)",
+            f"divergence {entry.divergence:.3f}{unsettled}  ({entry.seconds:.1f}s)",
             flush=True,
         )
 

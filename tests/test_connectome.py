@@ -22,7 +22,8 @@ from neurogarden.connectome.model import (
     digest_of,
     make_network,
 )
-from neurogarden.dojo import watch
+from neurogarden.dojo import NeuroGardenEnv, watch
+from neurogarden.dojo import distil as distil_module
 from neurogarden.dojo.distil import DistilConfig, distil, fit_readout
 from neurogarden.dojo.evolve import EvolveConfig, evolve
 from neurogarden.dojo.features import TINY_SIZE
@@ -474,11 +475,50 @@ def test_fitting_a_readout_finds_the_linear_teacher_behind_the_answers():
     rng = np.random.default_rng(0)
     features = rng.standard_normal((1500, 6))
     answers = np.array([softmax(row) for row in features @ rng.standard_normal((6, 7))])
-    w, b, agreement, divergence = fit_readout(features, answers, l2=0.0)
-    assert w.shape == (6, 7) and b.shape == (7,)
+    w, b, agreement, divergence, settled = fit_readout(features, answers, l2=0.0)
+    assert w.shape == (6, 7) and b.shape == (7,) and settled
     assert agreement > 0.98 and divergence < 1e-3
-    _, _, _, held_back = fit_readout(features, answers, l2=10.0)  # a readout kept near zero
+    _, _, _, held_back, _ = fit_readout(features, answers, l2=10.0)  # a readout kept near zero
     assert held_back > 10 * divergence
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(distil_module, "_FIT_STEPS", 2)  # cut short: it says so
+        assert not fit_readout(features, answers, l2=0.0)[4]
+    sure = np.eye(7)[answers.argmax(axis=1)]  # a teacher that never doubts, and never rests:
+    sure[:, 6] = 0  # the bias of the action it never takes stays finite
+    sure[sure.sum(axis=1) == 0, 0] = 1
+    _, b, _, _, settled = fit_readout(features, sure, l2=1e-4)
+    assert settled and np.all(np.isfinite(b)) and np.abs(b).max() < 100
+
+
+def test_a_lesson_is_what_it_says_tick_for_tick(cache):
+    config = DistilConfig(**{**LESSON, "rounds": 1, "lives": 1})
+    taught = distil(config)
+    world = int(np.random.default_rng(config.seed).integers(0, 2**31 - 1, size=1)[0])
+    blank = config.trainable().blank().to_vector()
+    distil_module._setup(config)
+    seen, said, lifespan = distil_module._fly((blank, world, True))
+    assert [lifespan] == taught.history[0].lifespans and len(seen) == len(said) == lifespan
+    # Live the life again: every moment written down is what the readout saw then, and what
+    # the teacher said of that same moment; and the life is the teacher's own.
+    env = NeuroGardenEnv(max_steps=config.max_steps)
+    teacher, student = EvolvedBrain(), config.trainable().brain(blank)
+    now, _ = env.reset(seed=world)
+    teacher.reset(brain_seed(world))
+    student.reset(brain_seed(world))
+    for tick in range(lifespan):
+        assert np.allclose(said[tick], teacher.probabilities(now))
+        student.act(now)
+        assert np.array_equal(seen[tick], student.features)
+        now, _, terminated, truncated, _ = env.step(teacher.act(now))
+    assert terminated or truncated
+    assert not np.array_equal(seen[3], seen[4])  # one tick off would be noticed
+    # The brain draws from softmax(scores / temperature): exactly the distribution fitted.
+    w, b, *_ = fit_readout(seen, said, config.l2)
+    genome = taught.genome
+    for moment in seen[::7]:
+        drawn_from = softmax((moment @ genome.w + genome.b) / config.temperature)
+        assert np.allclose(drawn_from, softmax(moment @ w + b), atol=1e-5)
+    assert not np.allclose(softmax(seen[0] @ genome.w + genome.b), softmax(seen[0] @ w + b))
 
 
 def test_distilling_teaches_the_readout_round_by_round(tmp_path, cache):
@@ -490,6 +530,9 @@ def test_distilling_teaches_the_readout_round_by_round(tmp_path, cache):
     assert len(student_round.lifespans) == 2 and all(0 < n <= 40 for n in student_round.lifespans)
     assert student_round.ticks > teacher_round.ticks >= 2  # every moment so far is kept
     assert 0 <= student_round.agreement <= 1 and student_round.divergence < np.log(7)
+    assert teacher_round.settled and student_round.settled
+    spread = distil(DistilConfig(**{**LESSON, "workers": 2}))  # however the lives are flown
+    assert np.array_equal(spread.genome.to_vector(), first.genome.to_vector())
     genome = first.genome
     assert genome.w.any() and np.all(genome.gains == 1.0) and genome.gain == pytest.approx(3.0)
     meta = first.meta
@@ -501,12 +544,18 @@ def test_distilling_teaches_the_readout_round_by_round(tmp_path, cache):
         "evolved-v1",
         student_round.ticks,
     )
-    assert told["teacher_generations"] == 120  # which teacher: the shipped one's ancestry
+    assert told["teacher_generations"] == 120  # which teacher: the shipped one's ancestry,
+    assert len(told["teacher_digest"]) == 16  # and a hash of its weights
     path = genome.save(tmp_path / "taught.npz", meta)
     assert 0 <= ConnectomeBrain(path=path).act(observation()) < 7
     # Evolution carries on from a taught brain, and remembers how it began.
-    bred = evolve(EvolveConfig(**CONNECTOME), start=genome, parent=meta)
+    asked = []
+    numpy_rng = np.random.default_rng
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(np.random, "default_rng", lambda seed: asked.append(seed) or numpy_rng(seed))
+        bred = evolve(EvolveConfig(**CONNECTOME), start=genome, parent=meta)
     assert bred.meta["total_generations"] == 2 and bred.meta["parent"]["distilled"] == told
+    assert [0, 0, 2] in asked  # not the lesson's worlds again: the seed is mixed with its rounds
     seen = []
     distil(DistilConfig(**LESSON), on_round=seen.append, checkpoint=lambda r: seen.append(r.meta))
     assert [type(item).__name__ for item in seen] == ["Round", "dict", "Round", "dict"]

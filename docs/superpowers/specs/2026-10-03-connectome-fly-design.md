@@ -182,6 +182,40 @@ when available; real GPU runs happen on the owner's machine), a spiking model.
 
 ## 9. What the implementation added (and where it deviates)
 
+**The largest deviation: the shipped brain was taught, not bred** (§4 said the
+481 numbers are "evolved by the existing strategy").
+
+- *Evolution from nothing stalls.* On the real graph (30 generations planned,
+  32 candidates, two lives of up to 1500 ticks each, about two minutes a
+  generation on this Mac) the centre reached the drink-rest-and-starve policy
+  by generation 3 (fitness 1315: a death at tick 899, the random brain's
+  lifespan) and by generation 10 every one of the 32 candidates scored exactly
+  1315. Rank-normalised scores that all tie give no step; the run was stopped.
+  The small network met the same wall and needed 120 generations to pass it;
+  at a hundred steps a second per core that is days here.
+- *So the readout is taught* (`neurogarden distil`, `dojo/distil.py`). The
+  shipped evolved brain senses the same 25 features, so it can say for any
+  moment how likely it would be to take each action. Round 1: it flies, the
+  connectome network senses the same moments, and the readout is fitted to its
+  answers by softmax regression (the readout is linear, so this is the whole
+  problem). Later rounds: the student flies, the teacher labels what the
+  student met, and the fit is redone on everything so far (DAgger). The input
+  side (25 gains, the network gain) keeps its starting values; `evolve
+  --start` can breed it afterwards. A lesson of five rounds of four lives
+  takes about five minutes.
+- *What the lesson showed about the model.* The teacher is almost linear in
+  its features: a readout fitted straight on the 25 features agrees with it on
+  98% of moments. Through the real wiring the same fit agrees on 76%. Measured
+  on a held-out life (`spikes/malecns_throughput_spike.py`, R² of a ridge fit
+  from the network back to each group of senses): the 64 pooled features
+  recover fruit smell at 0.24, humidity 0.40, nest smell 0.11, touch 0.11,
+  body 0.09, light 0.58; all 1,314 descending neurons recover 0.66, 0.78,
+  0.14, 0.47, 0.32, 0.97. So the pooling loses most of what reaches the
+  descending neurons, and not everything reaches them. A wider readout (256
+  features) fitted better and did not live longer; leak 1.0, six updates a
+  tick and other gains were no better than the defaults (gain 2 with doubled
+  input fits slightly better).
+
 **Deviations from the sections above**
 
 - **The control permutes rows** (§4 said "every connection's target shuffled").

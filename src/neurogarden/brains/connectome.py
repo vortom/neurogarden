@@ -304,6 +304,14 @@ class ConnectomeTrainable:
     def wiring(self) -> Wiring:
         return data.load(self.graph, self.min_synapses, self.control)
 
+    def ready(self) -> Wiring:
+        """Load the graph and lay out the senses and the readout on it: whatever will not do
+        (no graph in the cache, more pooled features than descending neurons) is refused
+        here, once, before any worker process is started."""
+        wiring = self.wiring()
+        pieces(wiring, self.encoding_seed, self.projection_seed, self.pooled)
+        return wiring
+
     def blank(self) -> ConnectomeGenome:
         """Every sense heard, the gain that carries a signal, and a readout that says nothing
         yet: where a brain that will be taught starts."""
