@@ -257,6 +257,15 @@ class EvolvedBrain:
         self._hidden = hidden_activation(self.genome, features)
         return choose(output_scores(self.genome, self._hidden), self.temperature, self._rng)
 
+    def probabilities(self, observation: dict[str, np.ndarray]) -> np.ndarray:
+        """How likely each action is here: what `act` draws from. Nothing of the brain's own
+        life is touched, so it can be asked about a moment another fly is living — which is
+        what makes it a teacher (`dojo.distil`)."""
+        values = scores(self.genome, tiny_features(observation, DEFAULT_AGE_SCALE))
+        if self.temperature <= 0:
+            return np.eye(len(values), dtype=np.float32)[int(np.argmax(values))]
+        return softmax(values / self.temperature)
+
     def thought(self) -> str:
         """The hidden layer as a sparkline: a brain scope in a speech bubble."""
         return sparkline(self._hidden)

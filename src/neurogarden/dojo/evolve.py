@@ -25,7 +25,7 @@ from neurogarden.brains.base import brain_seed
 from neurogarden.brains.connectome import ConnectomeTrainable
 from neurogarden.brains.evolved import DEFAULT_HIDDEN, EvolvedBrain, Genome, MlpTrainable
 from neurogarden.connectome.data import DEFAULT_MIN_SYNAPSES, VARIANTS
-from neurogarden.connectome.model import DEFAULT_SUBSTEPS
+from neurogarden.connectome.model import DEFAULT_SUBSTEPS, POOLED
 from neurogarden.dojo.env import NeuroGardenEnv
 from neurogarden.dojo.stats import FITNESSES, EpisodeStats, fitness_lifespan
 from neurogarden.engine import maps
@@ -56,6 +56,7 @@ class EvolveConfig:
     min_synapses: int = DEFAULT_MIN_SYNAPSES  # connectome only: connections weaker are dropped
     control: int | None = None  # connectome only: breed on the row-shuffled graph of this seed
     substeps: int = DEFAULT_SUBSTEPS  # connectome only: network updates per world tick
+    pooled: int = POOLED  # connectome only: features the readout sees
 
     def __post_init__(self) -> None:
         if self.population < 2 or self.population % 2:
@@ -76,9 +77,10 @@ class EvolveConfig:
             raise ValueError("temperature must be 0 (always the highest score) or positive")
         if self.brain not in BRAINS:
             raise ValueError(f"unknown brain {self.brain!r}; choose from {list(BRAINS)}")
-        if self.graph not in VARIANTS or self.min_synapses < 1 or self.substeps < 1:
+        if self.graph not in VARIANTS or min(self.min_synapses, self.substeps, self.pooled) < 1:
             raise ValueError(
-                f"graph must be one of {list(VARIANTS)}; min_synapses and substeps at least 1"
+                f"graph must be one of {list(VARIANTS)}; min_synapses, substeps and pooled "
+                "at least 1"
             )
 
     def trainable(self):
@@ -90,6 +92,7 @@ class EvolveConfig:
                 control=self.control,
                 substeps=self.substeps,
                 temperature=self.temperature,
+                pooled=self.pooled,
             )
         return MlpTrainable(hidden=self.hidden, temperature=self.temperature)
 

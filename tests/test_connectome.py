@@ -8,10 +8,10 @@ import numpy as np
 import pytest
 
 from neurogarden import cli
-from neurogarden.brains import BRAINS, ConnectomeBrain, ConnectomeGenome, Genome
+from neurogarden.brains import BRAINS, ConnectomeBrain, ConnectomeGenome, EvolvedBrain, Genome
 from neurogarden.brains.base import brain_seed
 from neurogarden.brains.connectome import ConnectomeFlock, ConnectomeTrainable
-from neurogarden.brains.evolved import weights_kind
+from neurogarden.brains.evolved import softmax, weights_kind
 from neurogarden.connectome import data
 from neurogarden.connectome.model import (
     POOLED,
@@ -23,6 +23,7 @@ from neurogarden.connectome.model import (
     make_network,
 )
 from neurogarden.dojo import watch
+from neurogarden.dojo.distil import DistilConfig, distil, fit_readout
 from neurogarden.dojo.evolve import EvolveConfig, evolve
 from neurogarden.dojo.features import TINY_SIZE
 from neurogarden.engine import Config
@@ -453,6 +454,97 @@ def test_evolution_breeds_the_parts_around_the_wiring(tmp_path, cache):
         EvolveConfig(graph="thorax")
 
 
+# --- learning from a teacher -------------------------------------------------------------------
+
+
+LESSON = dict(graph="full", min_synapses=1, rounds=2, lives=2, max_steps=40, workers=1, seed=3)
+
+
+def test_a_teacher_says_how_likely_each_action_is():
+    teacher, seen = EvolvedBrain(), observation()
+    said = teacher.probabilities(seen)
+    assert said.shape == (7,) and said.sum() == pytest.approx(1.0) and np.all(said >= 0)
+    assert np.array_equal(said, teacher.probabilities(seen))  # asking moves nothing on
+    sure = EvolvedBrain(temperature=0.0)
+    assert sure.probabilities(seen).tolist().count(1.0) == 1
+    assert int(np.argmax(sure.probabilities(seen))) == sure.act(seen)
+
+
+def test_fitting_a_readout_finds_the_linear_teacher_behind_the_answers():
+    rng = np.random.default_rng(0)
+    features = rng.standard_normal((1500, 6))
+    answers = np.array([softmax(row) for row in features @ rng.standard_normal((6, 7))])
+    w, b, agreement, divergence = fit_readout(features, answers, l2=0.0)
+    assert w.shape == (6, 7) and b.shape == (7,)
+    assert agreement > 0.98 and divergence < 1e-3
+    _, _, _, held_back = fit_readout(features, answers, l2=10.0)  # a readout kept near zero
+    assert held_back > 10 * divergence
+
+
+def test_distilling_teaches_the_readout_round_by_round(tmp_path, cache):
+    first = distil(DistilConfig(**LESSON))
+    second = distil(DistilConfig(**LESSON))
+    assert np.array_equal(first.genome.to_vector(), second.genome.to_vector())
+    teacher_round, student_round = first.history
+    assert (teacher_round.flown_by, student_round.flown_by) == ("teacher", "student")
+    assert len(student_round.lifespans) == 2 and all(0 < n <= 40 for n in student_round.lifespans)
+    assert student_round.ticks > teacher_round.ticks >= 2  # every moment so far is kept
+    assert 0 <= student_round.agreement <= 1 and student_round.divergence < np.log(7)
+    genome = first.genome
+    assert genome.w.any() and np.all(genome.gains == 1.0) and genome.gain == pytest.approx(3.0)
+    meta = first.meta
+    assert (meta["brain"], meta["graph"], meta["temperature"]) == ("connectome", "full", 0.5)
+    assert meta["digest"] == data.load("full", 1).digest and meta["total_generations"] == 0
+    told = meta["distilled"]
+    assert (told["rounds_done"], told["teacher"], told["ticks"]) == (
+        2,
+        "evolved-v1",
+        student_round.ticks,
+    )
+    assert told["teacher_generations"] == 120  # which teacher: the shipped one's ancestry
+    path = genome.save(tmp_path / "taught.npz", meta)
+    assert 0 <= ConnectomeBrain(path=path).act(observation()) < 7
+    # Evolution carries on from a taught brain, and remembers how it began.
+    bred = evolve(EvolveConfig(**CONNECTOME), start=genome, parent=meta)
+    assert bred.meta["total_generations"] == 2 and bred.meta["parent"]["distilled"] == told
+    seen = []
+    distil(DistilConfig(**LESSON), on_round=seen.append, checkpoint=lambda r: seen.append(r.meta))
+    assert [type(item).__name__ for item in seen] == ["Round", "dict", "Round", "dict"]
+    assert seen[1]["distilled"]["rounds_done"] == 1
+
+
+def test_the_readout_can_see_more_or_fewer_features(tmp_path, cache):
+    narrow = distil(DistilConfig(**LESSON, pooled=16, gain=2.0, input_gain=2.0))
+    genome = narrow.genome
+    assert genome.pooled == 16 and genome.size == 25 + 1 + 16 * 7 + 7
+    assert np.all(genome.gains == 2.0) and genome.gain == pytest.approx(2.0)
+    assert narrow.meta["pooled"] == 16 and narrow.meta["distilled"]["input_gain"] == 2.0
+    path = genome.save(tmp_path / "narrow.npz", narrow.meta)
+    brain = ConnectomeBrain(path=path)
+    assert brain.features.shape == (16,) and 0 <= brain.act(observation()) < 7
+    assert len(brain.projection.descending) == 80 and brain.projection.bucket.max() == 15
+    with pytest.raises(ValueError, match="16 pooled features, this run 64"):
+        evolve(EvolveConfig(**CONNECTOME), start=genome, parent=narrow.meta)
+    bred = evolve(EvolveConfig(**CONNECTOME, pooled=16), start=genome, parent=narrow.meta)
+    assert bred.genome.pooled == 16 and bred.meta["pooled"] == 16
+    with pytest.raises(ValueError, match="descending neurons"):  # more buckets than neurons
+        distil(DistilConfig(**LESSON, pooled=81))
+
+
+def test_distil_refuses_what_it_cannot_teach(tmp_path, cache):
+    for wrong in (dict(rounds=0), dict(temperature=0.0), dict(pooled=0), dict(gain=0.0)):
+        with pytest.raises(ValueError, match="must"):
+            DistilConfig(**{**LESSON, **wrong})
+    with pytest.raises(ValueError, match="graph must be"):
+        DistilConfig(graph="thorax")
+    spec = trainable()
+    student = spec.genome(spec.initial(np.random.default_rng(0))).save(
+        tmp_path / "cns.npz", spec.describe()
+    )
+    with pytest.raises(ValueError, match="not an evolved brain"):  # a student is no teacher
+        distil(DistilConfig(**LESSON, teacher=str(student)))
+
+
 # --- flying many -------------------------------------------------------------------------------
 
 
@@ -529,6 +621,8 @@ def test_connectome_info_and_refusals_without_a_graph(tmp_path, monkeypatch, cap
     argv = ["evolve", "--brain", "connectome", "--out", str(tmp_path / "x.npz"), "--workers", "1"]
     assert cli.main(argv) == 1
     assert "connectome build" in capsys.readouterr().err
+    assert cli.main(["distil", "--out", str(tmp_path / "x.npz"), "--workers", "1"]) == 1
+    assert "connectome build" in capsys.readouterr().err
     assert cli.main(["flock", "--count", "0"]) == 1
     assert "at least 1" in capsys.readouterr().err
     assert watch.main(["--brain", "connectome"]) == 1  # the dojo's own entry point, too
@@ -557,6 +651,24 @@ def test_evolve_and_flock_commands_on_a_cached_graph(tmp_path, cache, capsys):
     assert meta["total_generations"] == 2 and meta["parent"]["brain"] == "connectome"
     assert cli.main([*resume, "--control", "1", "--workers", "1"]) == 1
     assert "do not carry over" in capsys.readouterr().err
+    taught = str(tmp_path / "taught")
+    lesson = ["distil", "--graph", "full", "--min-synapses", "1", "--out", taught, "--pooled", "16"]
+    lesson += ["--rounds", "2", "--lives", "1", "--max-steps", "30", "--workers", "1"]
+    assert cli.main(lesson) == 0
+    printed = capsys.readouterr().out
+    assert "teaching a connectome brain on the full graph (400 neurons" in printed
+    assert "round 1/2: the teacher flew" in printed and "round 2/2: the student flew" in printed
+    assert f"wrote {taught}.npz" in printed
+    bred = str(tmp_path / "bred.npz")  # evolution carries on, with the taught brain's shape
+    carry_on = ["evolve", "--start", taught + ".npz", "--out", bred, "--generations", "1"]
+    carry_on += ["--population", "2", "--episodes", "1", "--max-steps", "20", "--workers", "1"]
+    assert cli.main(carry_on) == 0
+    capsys.readouterr()
+    with np.load(bred) as file:
+        meta = json.loads(str(file["meta"]))
+    assert meta["pooled"] == 16 and meta["parent"]["distilled"]["rounds_done"] == 2
+    assert cli.main([*lesson, "--teacher", out]) == 1  # a connectome brain is no teacher
+    assert "not an evolved brain" in capsys.readouterr().err
     shuffled = str(tmp_path / "mine.npz")  # the control, bred under a name of its own
     assert cli.main([*argv[:-2], "--control", "1", "--out", shuffled, "--workers", "1"]) == 0
     capsys.readouterr()

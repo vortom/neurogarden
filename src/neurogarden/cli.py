@@ -20,6 +20,7 @@ from neurogarden.brains import BRAINS, WEIGHTED, ConnectomeGenome, Genome
 from neurogarden.brains.evolved import weights_kind
 from neurogarden.connectome import data as connectome_data
 from neurogarden.connectome.data import VARIANTS
+from neurogarden.dojo.distil import DistilConfig, distil
 from neurogarden.dojo.evolve import BRAINS as BREEDABLE
 from neurogarden.dojo.evolve import EvolveConfig, evolve
 from neurogarden.dojo.render_ansi import AgentGlimpse, View, render_view
@@ -154,6 +155,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="connectome: breed on the row-shuffled graph (the control)",
     )  # fmt: skip
     evolve_cmd.add_argument("--substeps", type=int, default=None, help="connectome only")
+    evolve_cmd.add_argument(
+        "--pooled", type=int, default=None, help="connectome: features the readout sees"
+    )
     evolve_cmd.add_argument("--out", required=True, metavar="FILE.npz", help="where the weights go")
     evolve_cmd.add_argument("--generations", type=int, default=EvolveConfig.generations)
     evolve_cmd.add_argument("--population", type=int, default=EvolveConfig.population)
@@ -181,6 +185,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evolve_cmd.add_argument(
         "--start", default=None, metavar="FILE.npz", help="carry on from these weights"
+    )
+
+    distil_cmd = commands.add_parser(
+        "distil", help="teach a connectome brain its readout from the evolved brain"
+    )
+    distil_cmd.add_argument("--out", required=True, metavar="FILE.npz", help="where the weights go")
+    distil_cmd.add_argument(
+        "--teacher", default=None, metavar="FILE.npz", help="an evolved brain (default: shipped)"
+    )
+    distil_cmd.add_argument("--graph", choices=VARIANTS, default=DistilConfig.graph)
+    distil_cmd.add_argument("--min-synapses", type=int, default=DistilConfig.min_synapses)
+    distil_cmd.add_argument(
+        "--control", type=int, default=None, metavar="SEED",
+        help="learn on the row-shuffled graph (the control)",
+    )  # fmt: skip
+    distil_cmd.add_argument("--substeps", type=int, default=DistilConfig.substeps)
+    distil_cmd.add_argument("--pooled", type=int, default=DistilConfig.pooled)
+    distil_cmd.add_argument(
+        "--gain", type=float, default=DistilConfig.gain, help="the network gain (not learned here)"
+    )
+    distil_cmd.add_argument(
+        "--input-gain", type=float, default=DistilConfig.input_gain,
+        help="how hard the senses drive their neurons (not learned here)",
+    )  # fmt: skip
+    distil_cmd.add_argument(
+        "--rounds", type=int, default=DistilConfig.rounds,
+        help="the teacher flies the first, the student the others",
+    )  # fmt: skip
+    distil_cmd.add_argument("--lives", type=int, default=DistilConfig.lives, help="per round")
+    distil_cmd.add_argument("--max-steps", type=int, default=DistilConfig.max_steps)
+    distil_cmd.add_argument("--temperature", type=float, default=DistilConfig.temperature)
+    distil_cmd.add_argument("--seed", type=int, default=DistilConfig.seed)
+    distil_cmd.add_argument("--map", default=DistilConfig.map, help="the world to learn in")
+    distil_cmd.add_argument(
+        "--workers", type=int, default=None, help="processes flying the lives (default: all cores)"
     )
 
     lives_cmd = commands.add_parser("lives", help="the hall of flies: every life in an archive")
@@ -530,6 +569,37 @@ def cmd_verify(args) -> int:
     return 0
 
 
+def _writable(target: str) -> None:
+    out_dir = Path(target).resolve().parent
+    if not out_dir.is_dir():  # found out now, not after the last generation
+        raise ValueError(f"cannot write to {out_dir}: no such directory")
+
+
+def _on_graph(trainable) -> str:
+    wiring = trainable.wiring()
+    control = "" if wiring.control is None else f", random control {wiring.control}"
+    return (
+        f"a connectome brain on the {wiring.variant} graph ({wiring.n} neurons, "
+        f"{wiring.connections} connections{control})"
+    )
+
+
+def _keeper(target: str):
+    """Where a long run's weights go and the function that writes them after each of its
+    steps — beside the name, then renamed, so the file is whole or absent and a run cut
+    short keeps what it had. Also the list of steps written so far."""
+    out = Path(target)
+    out = out if out.suffix == ".npz" else out.with_name(out.name + ".npz")
+    saved: list[int] = []
+
+    def keep(result) -> None:
+        partial = result.genome.save(out.with_name(out.stem + ".part.npz"), result.meta)
+        partial.replace(out)
+        saved.append(len(result.history))
+
+    return out, keep, saved
+
+
 def cmd_evolve(args) -> int:
     try:
         start = parent = None
@@ -548,6 +618,7 @@ def cmd_evolve(args) -> int:
             min_synapses=setting(args.min_synapses, "min_synapses"),
             control=args.control if args.control is not None else inherited.get("control"),
             substeps=setting(args.substeps, "substeps"),
+            pooled=setting(args.pooled, "pooled"),
             generations=args.generations,
             population=args.population,
             sigma=args.sigma,
@@ -569,22 +640,16 @@ def cmd_evolve(args) -> int:
                 else inherited.get("temperature", EvolveConfig.temperature)
             ),
         )
-        out_dir = Path(args.out).resolve().parent
-        if not out_dir.is_dir():  # found out now, not after the last generation
-            raise ValueError(f"cannot write to {out_dir}: no such directory")
+        _writable(args.out)
         if config.brain == "connectome":
-            wiring = config.trainable().wiring()  # refused here if the graph is not cached
-            control = "" if config.control is None else f", random control {config.control}"
-            what = (
-                f"a connectome brain on the {wiring.variant} graph ({wiring.n} neurons, "
-                f"{wiring.connections} connections{control})"
-            )
+            what = _on_graph(config.trainable())  # refused here if the graph is not cached
         else:
             connectome_only = {
                 "--graph": args.graph,
                 "--min-synapses": args.min_synapses,
                 "--control": args.control,
                 "--substeps": args.substeps,
+                "--pooled": args.pooled,
             }
             given = [flag for flag, value in connectome_only.items() if value is not None]
             if given:  # said out loud, not silently dropped
@@ -608,21 +673,64 @@ def cmd_evolve(args) -> int:
         f"{config.population}, {config.episodes} lives each up to {config.max_steps} ticks, "
         f"fitness {config.fitness}, temperature {config.temperature}"
     )
-    out = Path(args.out)
-    out = out if out.suffix == ".npz" else out.with_name(out.name + ".npz")
-    saved = []
-
-    def keep(result) -> None:
-        """Write the weights so far, whole or not at all: a run cut short keeps its last
-        finished generation."""
-        partial = result.genome.save(out.with_name(out.stem + ".part.npz"), result.meta)
-        partial.replace(out)
-        saved.append(len(result.history))
-
+    out, keep, saved = _keeper(args.out)
     try:
         evolve(config, start=start, on_generation=report, parent=parent, checkpoint=keep)
     except KeyboardInterrupt:
         kept = f"{out} holds generation {saved[-1]}" if saved else "nothing written"
+        print(f"stopped; {kept}", file=sys.stderr)
+        return 1
+    except (ValueError, OSError) as err:
+        return _refuse(err)
+    print(f"wrote {out}")
+    return 0
+
+
+def cmd_distil(args) -> int:
+    try:
+        config = DistilConfig(
+            rounds=args.rounds,
+            lives=args.lives,
+            max_steps=args.max_steps,
+            seed=args.seed,
+            workers=args.workers,
+            map=args.map,
+            temperature=args.temperature,
+            teacher=args.teacher,
+            graph=args.graph,
+            min_synapses=args.min_synapses,
+            control=args.control,
+            substeps=args.substeps,
+            pooled=args.pooled,
+            gain=args.gain,
+            input_gain=args.input_gain,
+        )
+        _writable(args.out)
+        what = _on_graph(config.trainable())  # refused here if the graph is not cached
+        if args.teacher is not None:
+            Genome.load(args.teacher)  # and here if the teacher is not an evolved brain
+    except (ValueError, OSError) as err:
+        return _refuse(err)
+
+    def report(entry) -> None:
+        lived = sorted(entry.lifespans)[len(entry.lifespans) // 2]
+        print(
+            f"round {entry.index + 1}/{config.rounds}: the {entry.flown_by} flew, median "
+            f"lifespan {lived} | {entry.ticks} moments, agreement {entry.agreement:.2f}, "
+            f"divergence {entry.divergence:.3f}  ({entry.seconds:.1f}s)",
+            flush=True,
+        )
+
+    print(
+        f"teaching {what}: {config.rounds} rounds of {config.lives} lives up to "
+        f"{config.max_steps} ticks, {config.pooled} pooled features, "
+        f"teacher {config.teacher or 'the shipped evolved brain'}"
+    )
+    out, keep, saved = _keeper(args.out)
+    try:
+        distil(config, on_round=report, checkpoint=keep)
+    except KeyboardInterrupt:
+        kept = f"{out} holds round {saved[-1]}" if saved else "nothing written"
         print(f"stopped; {kept}", file=sys.stderr)
         return 1
     except (ValueError, OSError) as err:
@@ -709,6 +817,7 @@ def cmd_connectome(args) -> int:
 
 COMMANDS = {
     "evolve": cmd_evolve,
+    "distil": cmd_distil,
     "flock": cmd_flock,
     "connectome": cmd_connectome,
     "serve": cmd_serve,

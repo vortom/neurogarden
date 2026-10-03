@@ -44,12 +44,12 @@ _ACTIONS = len(Action)
 _pieces: dict[tuple, tuple[Encoding, Projection]] = {}  # per graph and seeds, shared by brains
 
 
-def pieces(wiring: Wiring, encoding_seed: int, projection_seed: int):
-    key = (wiring.digest, encoding_seed, projection_seed)
+def pieces(wiring: Wiring, encoding_seed: int, projection_seed: int, pooled: int = POOLED):
+    key = (wiring.digest, encoding_seed, projection_seed, pooled)
     if key not in _pieces:
         _pieces[key] = (
             Encoding.for_wiring(wiring, encoding_seed),
-            Projection.for_wiring(wiring, projection_seed),
+            Projection.for_wiring(wiring, projection_seed, pooled),
         )
     return _pieces[key]
 
@@ -60,17 +60,21 @@ class ConnectomeGenome:
 
     gains: np.ndarray  # (TINY_SIZE,) how hard each feature drives its neurons
     log_gain: np.ndarray  # (1,) the network gain, as its logarithm so it stays positive
-    w: np.ndarray  # (POOLED, actions)
+    w: np.ndarray  # (pooled, actions): its height says how many features the readout sees
     b: np.ndarray  # (actions,)
 
     @classmethod
-    def zeros(cls) -> ConnectomeGenome:
+    def zeros(cls, pooled: int = POOLED) -> ConnectomeGenome:
         return cls(
             gains=np.zeros(TINY_SIZE, np.float32),
             log_gain=np.zeros(1, np.float32),
-            w=np.zeros((POOLED, _ACTIONS), np.float32),
+            w=np.zeros((pooled, _ACTIONS), np.float32),
             b=np.zeros(_ACTIONS, np.float32),
         )
+
+    @property
+    def pooled(self) -> int:
+        return self.w.shape[0]
 
     @property
     def size(self) -> int:
@@ -128,7 +132,8 @@ class ConnectomeGenome:
         meta = weights_meta(file)
         names = ("gains", "log_gain", "w", "b")
         genome = cls(*(np.asarray(file[part], dtype=np.float32) for part in names))
-        for part, shape in zip(genome.parts(), cls.zeros().parts(), strict=True):
+        pooled = genome.w.shape[0] if genome.w.ndim == 2 else -1
+        for part, shape in zip(genome.parts(), cls.zeros(max(pooled, 1)).parts(), strict=True):
             if part.shape != shape.shape:
                 raise ValueError(f"a {part.shape} array where {shape.shape} was expected")
         return genome, meta
@@ -193,13 +198,14 @@ class ConnectomeBrain:
             wiring,
             int(setting(encoding_seed, "encoding_seed", 0)),
             int(setting(projection_seed, "projection_seed", 0)),
+            self.genome.pooled,
         )
         self.reset()
 
     def reset(self, seed: int | None = None) -> None:
         self._rng = SplitMix64(self._seed if seed is None else seed)
         self.rate = self.network.zeros()
-        self._pooled = np.zeros(POOLED, np.float32)
+        self._pooled = np.zeros(self.genome.pooled, np.float32)
 
     # The three pieces `act` is made of, so a flock can step many brains in one multiply.
 
@@ -216,6 +222,11 @@ class ConnectomeBrain:
     def act(self, observation: dict[str, np.ndarray]) -> int:
         current = self.current(observation)
         return self.decide(self.network.step(self.rate, current, self.genome.gain))
+
+    @property
+    def features(self) -> np.ndarray:
+        """What the readout saw at the last tick: the pooled descending activity."""
+        return self._pooled
 
     def thought(self) -> str:
         """Sixteen of the pooled descending features, as a sparkline."""
@@ -281,28 +292,31 @@ class ConnectomeTrainable:
     temperature: float = 0.0
     encoding_seed: int = 0
     projection_seed: int = 0
+    pooled: int = POOLED  # features the descending neurons are pooled into for the readout
+    gain: float = INITIAL_GAIN  # the network gain a new genome starts with
+    input_gain: float = 1.0  # and how hard every sense drives its neurons, to start with
     kind = "connectome"
 
     @property
     def size(self) -> int:
-        return ConnectomeGenome.zeros().size
+        return ConnectomeGenome.zeros(self.pooled).size
 
     def wiring(self) -> Wiring:
         return data.load(self.graph, self.min_synapses, self.control)
 
     def initial(self, rng: np.random.Generator, scale: float = 1.0) -> np.ndarray:
         """Every sense heard, the gain that carries a signal, a small random readout."""
-        shape = ConnectomeGenome.zeros()
-        w = rng.standard_normal(shape.w.shape) * scale / np.sqrt(POOLED)
+        shape = ConnectomeGenome.zeros(self.pooled)
+        w = rng.standard_normal(shape.w.shape) * scale / np.sqrt(self.pooled)
         return ConnectomeGenome(
-            gains=np.ones(TINY_SIZE, np.float32),
-            log_gain=np.full(1, np.log(INITIAL_GAIN), np.float32),
+            gains=np.full(TINY_SIZE, self.input_gain, np.float32),
+            log_gain=np.full(1, np.log(self.gain), np.float32),
             w=w.astype(np.float32),
             b=shape.b,
         ).to_vector()
 
     def genome(self, vector: np.ndarray) -> ConnectomeGenome:
-        return ConnectomeGenome.zeros().with_vector(vector)
+        return ConnectomeGenome.zeros(self.pooled).with_vector(vector)
 
     def brain(self, vector: np.ndarray) -> ConnectomeBrain:
         return ConnectomeBrain(
@@ -320,6 +334,10 @@ class ConnectomeTrainable:
         another, where the same numbers would drive and read other pathways."""
         if not isinstance(start, ConnectomeGenome):
             raise ValueError("the start is not a connectome brain's weights")
+        if start.pooled != self.pooled:
+            raise ValueError(
+                f"the start reads {start.pooled} pooled features, this run {self.pooled}"
+            )
         bred_on = (parent or {}).get("digest")
         if bred_on is not None and bred_on != self.wiring().digest:
             raise ValueError(
@@ -333,6 +351,7 @@ class ConnectomeTrainable:
             "brain": self.kind,
             **self.wiring().describe(),
             "model_version": MODEL_VERSION,
+            "pooled": self.pooled,
             "substeps": self.substeps,
             "leak": self.leak,
             "encoding_seed": self.encoding_seed,
