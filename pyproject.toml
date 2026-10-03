@@ -14,10 +14,18 @@ dependencies = [
 [project.scripts]
 neurogarden = "neurogarden.cli:main"
 
+[project.optional-dependencies]
+connectome = [
+    "pyarrow>=17",
+    "scipy>=1.14",
+]
+
 [dependency-groups]
 dev = [
+    "pyarrow>=17",
     "pytest>=8",
     "ruff>=0.6",
+    "scipy>=1.14",
 ]
 
 [build-system]
