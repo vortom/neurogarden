@@ -85,11 +85,7 @@ class Fly:
 
     @property
     def stats(self) -> EpisodeStats | None:
-        if self.died is None:
-            return None
-        fields = self.died.stats.model_dump()
-        fields["death_causes"] = tuple(fields["death_causes"])
-        return EpisodeStats(**fields)
+        return None if self.died is None else stats_of(self.died)
 
     def observations(self) -> Iterator[Observation]:
         client = self._session._client
@@ -105,6 +101,13 @@ class Fly:
 
     def say(self, text: str) -> None:
         self._session._run(self._session._client.say(text))
+
+
+def stats_of(died) -> EpisodeStats:
+    """A `died` message's stats as the dojo's EpisodeStats: one type for both worlds."""
+    fields = died.stats.model_dump()
+    fields["death_causes"] = tuple(fields["death_causes"])
+    return EpisodeStats(**fields)
 
 
 def run_brain(

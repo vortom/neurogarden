@@ -46,8 +46,13 @@ class Wiring:
     min_synapses: int = 5
     control: int | None = None  # seed of the row shuffle, for the random-graph control
     digest: str = field(default="")
+    networks: dict = field(default_factory=dict, repr=False, compare=False)  # see make_network
 
     def __post_init__(self) -> None:
+        # One layout wherever the graph came from: every row's columns ascending. The sums
+        # then add up in the same order on every machine, and torch's CSR requires it.
+        if not self.matrix.has_sorted_indices:
+            self.matrix = self.matrix.sorted_indices()
         if not self.digest:
             self.digest = digest_of(self.matrix, self.superclass, self.klass)
 
@@ -99,7 +104,7 @@ def digest_of(matrix, superclass: np.ndarray, klass: np.ndarray) -> str:
     which are read out; the arrays are hashed in fixed types, so the hash does not depend on
     how scipy chose to store them."""
     matrix = matrix.tocsr()
-    if not matrix.has_sorted_indices:
+    if not matrix.has_sorted_indices:  # a Wiring's already are; a bare matrix may not be
         matrix = matrix.sorted_indices()
     sha = hashlib.sha256()
     sha.update(np.asarray(matrix.shape, "<i8").tobytes())
@@ -203,11 +208,18 @@ def make_network(
     backend: str = "numpy",
     device: str | None = None,
 ) -> RateNetwork:
-    if backend == "numpy":
-        return RateNetwork(wiring, substeps, leak)
-    if backend == "torch":
-        return TorchRateNetwork(wiring, substeps, leak, device)
-    raise ValueError(f"unknown backend {backend!r}; choose numpy or torch")
+    """The network for this wiring and these settings — one, shared by every brain on it: on
+    torch the graph is put on the device once, not once per fly. A network keeps no state
+    (each brain holds its own rates), so sharing is safe."""
+    key = (substeps, leak, backend, device)
+    if key not in wiring.networks:
+        if backend == "numpy":
+            wiring.networks[key] = RateNetwork(wiring, substeps, leak)
+        elif backend == "torch":
+            wiring.networks[key] = TorchRateNetwork(wiring, substeps, leak, device)
+        else:
+            raise ValueError(f"unknown backend {backend!r}; choose numpy or torch")
+    return wiring.networks[key]
 
 
 # --- senses in ---------------------------------------------------------------------------------

@@ -85,27 +85,11 @@ class Genome:
     def load(cls, source) -> tuple[Genome, dict]:
         """From a path, or anything with `open("rb")` (a packaged resource). ValueError for
         a file that is not a brain of this shape."""
-        name = str(source) if isinstance(source, str | Path) else getattr(source, "name", source)
-        try:
-            if hasattr(source, "open") and not isinstance(source, Path):
-                with source.open("rb") as handle, np.load(handle) as data:
-                    genome, meta = cls._unpack(data, name)
-            else:
-                with np.load(source) as data:
-                    genome, meta = cls._unpack(data, name)
-        except (KeyError, ValueError, TypeError, OSError, zipfile.BadZipFile) as err:
-            if isinstance(err, FileNotFoundError):
-                raise
-            raise ValueError(f"{name}: not an evolved brain's weights ({err})") from None
-        if meta.get("features_version", FEATURES_VERSION) != FEATURES_VERSION:
-            raise ValueError(f"{name}: features_version {meta['features_version']} is not ours")
-        return genome, meta
+        return read_weights(source, "an evolved brain's weights", cls._unpack)
 
     @classmethod
-    def _unpack(cls, data, name: str) -> tuple[Genome, dict]:
-        meta = json.loads(str(data["meta"])) if "meta" in data else {}
-        if not isinstance(meta, dict):
-            raise ValueError("meta is not an object")
+    def _unpack(cls, data) -> tuple[Genome, dict]:
+        meta = weights_meta(data)
         genome = cls(
             *(np.asarray(data[part], dtype=np.float32) for part in ("w1", "b1", "w2", "b2"))
         )
@@ -133,9 +117,53 @@ def scores(genome: Genome, features: np.ndarray) -> np.ndarray:
     return output_scores(genome, hidden_activation(genome, features))
 
 
-def default_weights():
-    """The shipped weights as a packaged resource: readable wherever the package lives."""
-    return resources.files("neurogarden.brains").joinpath("weights", DEFAULT_WEIGHTS)
+def default_weights(name: str = DEFAULT_WEIGHTS):
+    """Shipped weights as a packaged resource: readable wherever the package lives."""
+    return resources.files("neurogarden.brains").joinpath("weights", name)
+
+
+# What numpy raises for a file that is not an .npz of ours: missing arrays, a pickle, a zip
+# cut short, an empty file.
+_NOT_WEIGHTS = (KeyError, ValueError, TypeError, OSError, EOFError, zipfile.BadZipFile)
+
+
+def weights_meta(file) -> dict:
+    """The `meta` of an opened brain file: how it came to be ({} when it does not say)."""
+    meta = json.loads(str(file["meta"])) if "meta" in file else {}
+    if not isinstance(meta, dict):
+        raise ValueError("meta is not an object")
+    return meta
+
+
+def read_weights(source, what: str, unpack):
+    """Open a brain file — a path, or anything with `open("rb")` (a packaged resource) — and
+    `unpack(file)` it into `(genome, meta)`. A file that is not `what` is a ValueError that
+    names it; a file that is not there stays a FileNotFoundError."""
+    name = str(source) if isinstance(source, str | Path) else getattr(source, "name", source)
+    try:
+        if hasattr(source, "open") and not isinstance(source, Path):
+            with source.open("rb") as handle, np.load(handle) as file:
+                genome, meta = unpack(file)
+        else:
+            with np.load(source) as file:
+                genome, meta = unpack(file)
+    except _NOT_WEIGHTS as err:
+        if isinstance(err, FileNotFoundError):
+            raise
+        raise ValueError(f"{name}: not {what} ({err})") from None
+    if meta.get("features_version", FEATURES_VERSION) != FEATURES_VERSION:
+        raise ValueError(f"{name}: features_version {meta['features_version']} is not ours")
+    return genome, meta
+
+
+def weights_kind(path: str | Path) -> str:
+    """Which brain a weights file says it belongs to ("evolved" when it does not say, or
+    cannot be read: that loader then explains why)."""
+    try:
+        with np.load(path) as file:
+            return str(weights_meta(file).get("brain", "evolved"))
+    except _NOT_WEIGHTS:
+        return "evolved"
 
 
 def softmax(values: np.ndarray) -> np.ndarray:

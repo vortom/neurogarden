@@ -245,9 +245,26 @@ when available; real GPU runs happen on the owner's machine), a spiking model.
   `load` refuses a pair that does not match (half a rebuild, a truncated file)
   with the command that fixes it.
 - `evolve` refuses `--graph`, `--min-synapses`, `--control` and `--substeps`
-  for the small network instead of ignoring them. A server whose hosted brain
-  cannot be built (`serve --npc connectome:1` without a graph) releases its
-  archive instead of holding the lock.
+  for the small network instead of ignoring them. A run that carries on from
+  `--start` draws on from where its ancestors stopped (the seed is mixed with
+  the generations behind it) instead of breeding on the same worlds and noise
+  again — which matters now that stopping and resuming is ordinary.
+- A server builds its hosted brains before it creates the world, so
+  `serve --npc connectome:1` without a graph is refused with nothing left
+  behind; `dojo.watch` refuses the same way.
+- **The flock.** Every fly has its own stream of chance (`--seed` plus its
+  place in the flock, mixed with its life number): flies that share weights
+  must not share their draws, or ten flies are one fly ten times. The brains
+  think off the event loop, so the sockets are read while a big graph is
+  multiplied. Owners are `cns-N`, `rnd-N` for the control, and the file's name
+  for `--weights`, so a second flock does not take over the first one's flies.
+- **One layout, one network.** A `Wiring` keeps every row's columns ascending
+  (torch's CSR requires it, and the sums then add up in the same order
+  wherever the graph came from), and holds the network built on it, so on
+  torch the graph is put on the device once, not once per fly.
+- `connectome fetch` checks the bytes received against the promised length
+  and times out on a stalled connection; `connectome info` names a neuron
+  table it cannot read instead of dying on it.
 - The synthetic wiring in the tests has 400 neurons, not a few dozen: the
   projection needs 64 descending neurons to pool.
 - Building the central graph from the cached files takes 78 s through the

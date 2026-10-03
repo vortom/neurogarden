@@ -16,6 +16,7 @@ from neurogarden.brains.connectome import ConnectomeBrain, ConnectomeFlock
 from neurogarden.dojo.stats import EpisodeStats
 
 from .client import DEFAULT_URL, AsyncClient
+from .session import stats_of
 
 
 @dataclass
@@ -28,10 +29,10 @@ class FlockLife:
     stats: EpisodeStats
 
 
-def _life(owner: str, died) -> FlockLife:
-    fields = died.stats.model_dump()
-    fields["death_causes"] = tuple(fields["death_causes"])
-    return FlockLife(owner, died.name, died.lineage, EpisodeStats(**fields))
+def _life_seed(fly: int, lineage: int) -> int:
+    """Every fly its own stream of chance, every life another: flies that share weights must
+    not also share their draws, or the flock is one fly ten times."""
+    return brain_seed((fly << 32) ^ lineage)
 
 
 def _together(brains: list[Brain]) -> ConnectomeFlock | None:
@@ -52,16 +53,23 @@ async def fly_flock(
     token: str = "dev",
     lives: int | None = None,
     on_life: Callable[[FlockLife], None] | None = None,
+    seeds: list[int] | None = None,
 ) -> list[FlockLife]:
     """Join every brain as its own owner and fly them all, tick by tick.
 
     Each fly rejoins after death until it has lived `lives` lives (forever when None).
+    `seeds` gives every fly its own stream of chance (0, 1, 2… when not given).
     Returns every finished life; a lost connection raises ConnectionLost.
     """
     if len(brains) != len(owners) or not brains:
         raise ValueError("a flock needs as many owners as brains, and at least one")
     if len(set(owners)) != len(owners):
         raise ValueError("every fly of a flock needs its own owner name")
+    seeds = list(range(len(brains))) if seeds is None else seeds
+    if len(seeds) != len(brains):
+        raise ValueError("a flock needs as many seeds as brains")
+    if lives is not None and lives <= 0:
+        return []  # nothing to live: like run_brain, without joining anyone
     together = _together(brains)
     mouths = [Mouth(brain) for brain in brains]
     count = len(brains)
@@ -77,8 +85,16 @@ async def fly_flock(
 
         async def hatch(index: int) -> None:
             joined = await clients[index].join()
-            brains[index].reset(brain_seed(joined.lineage))
+            brains[index].reset(_life_seed(seeds[index], joined.lineage))
             flying[index] = True
+
+        def think(channels: list) -> list[int | None]:
+            if together is not None:
+                return together.act(channels)
+            return [
+                None if seen is None else int(brain.act(seen))
+                for brain, seen in zip(brains, channels, strict=True)
+            ]
 
         await asyncio.gather(*(hatch(index) for index in range(count)))
         while any(flying):
@@ -92,20 +108,17 @@ async def fly_flock(
                     continue
                 flying[index] = False  # it died: its obituary is on the client
                 lived[index] += 1
-                life = _life(owners[index], clients[index].last_died)
+                died = clients[index].last_died
+                life = FlockLife(owners[index], died.name, died.lineage, stats_of(died))
                 finished.append(life)
                 if on_life is not None:
                     on_life(life)
                 if lives is None or lived[index] < lives:
                     reborn.append(index)
             channels = [None if seen is None else seen.channels for seen in observations]
-            if together is not None:
-                actions = together.act(channels)
-            else:
-                actions = [
-                    None if seen is None else int(brain.act(seen))
-                    for brain, seen in zip(brains, channels, strict=True)
-                ]
+            # Off the loop: a big graph thinks for a good part of a tick, and the sockets
+            # must be read meanwhile.
+            actions = await asyncio.to_thread(think, channels)
             sends = []
             for index, observation in enumerate(observations):
                 if observation is None:

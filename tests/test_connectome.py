@@ -9,7 +9,9 @@ import pytest
 
 from neurogarden import cli
 from neurogarden.brains import BRAINS, ConnectomeBrain, ConnectomeGenome, Genome
+from neurogarden.brains.base import brain_seed
 from neurogarden.brains.connectome import ConnectomeFlock, ConnectomeTrainable
+from neurogarden.brains.evolved import weights_kind
 from neurogarden.connectome import data
 from neurogarden.connectome.model import (
     POOLED,
@@ -20,12 +22,13 @@ from neurogarden.connectome.model import (
     digest_of,
     make_network,
 )
+from neurogarden.dojo import watch
 from neurogarden.dojo.evolve import EvolveConfig, evolve
 from neurogarden.dojo.features import TINY_SIZE
 from neurogarden.engine import Config
 from neurogarden.engine.rng import SplitMix64
 from neurogarden.sdk import fly_flock
-from neurogarden.server import Archive, Server, ServerConfig
+from neurogarden.server import Server, ServerConfig
 from test_brains import observation
 
 # A small brain with every class the encoding asks for: (class, superclass, how many).
@@ -96,6 +99,9 @@ def test_assemble_keeps_strong_connections_signs_them_and_normalises_rows():
     relabelled = klass.copy()
     relabelled[0] = "gustatory"  # what a neuron is decides what drives it: part of the hash
     assert digest_of(wiring.matrix, superclass, relabelled) != wiring.digest
+    assert wiring.matrix.has_sorted_indices  # one layout, wherever the graph came from
+    assert make_network(wiring) is make_network(wiring)  # and one network for all its brains
+    assert make_network(wiring, substeps=1) is not make_network(wiring)
 
 
 def test_the_central_graph_leaves_the_optic_lobes_out():
@@ -119,6 +125,7 @@ def test_the_control_shuffles_who_receives_what_and_nothing_else():
     assert control.describe()["control"] == 3 and wiring.describe()["control"] is None
     order = _shuffled(np.arange(wiring.n), SplitMix64(3))  # our generator, not numpy's
     assert np.array_equal(control.matrix.toarray(), wiring.matrix.toarray()[order])
+    assert control.matrix.has_sorted_indices
 
 
 def test_build_reads_the_published_tables_and_caches_the_graph(tmp_path, monkeypatch):
@@ -171,7 +178,7 @@ def test_build_reads_the_published_tables_and_caches_the_graph(tmp_path, monkeyp
     data.forget()
 
 
-def test_a_half_written_cache_is_refused_not_misread(cache):
+def test_a_half_written_cache_is_refused_not_misread(cache, capsys):
     graph_path, neurons_path = data.graph_paths("full", 1)
     assert {path.name for path in cache.iterdir()} == {graph_path.name, neurons_path.name}
     table = neurons_path.read_bytes()
@@ -183,6 +190,45 @@ def test_a_half_written_cache_is_refused_not_misread(cache):
     graph_path.write_bytes(graph_path.read_bytes()[:100])
     with pytest.raises(ValueError, match="cannot be read.*connectome build"):
         data.load("full", 1)
+    neurons_path.write_bytes(b"")
+    with pytest.raises(ValueError, match="cannot be read"):
+        data.load("full", 1)
+    assert data.info()["broken"] == [neurons_path.name] and data.info()["graphs"] == []
+    assert cli.main(["connectome", "info"]) == 0
+    assert f"{neurons_path.name}: cannot be read" in capsys.readouterr().out
+
+
+class Download:
+    """What urlopen gives back: headers, and a body that may stop early."""
+
+    def __init__(self, body: bytes, promised: int) -> None:
+        self.body, self.headers = body, {"Content-Length": str(promised)}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> None:
+        pass
+
+    def read(self, size: int) -> bytes:
+        chunk, self.body = self.body[:size], self.body[size:]
+        return chunk
+
+
+def test_fetch_keeps_only_whole_files(tmp_path, monkeypatch):
+    promised = {"n": 9}
+    monkeypatch.setattr(
+        data.urllib.request, "urlopen", lambda url, timeout: Download(b"feather", promised["n"])
+    )
+    with pytest.raises(OSError, match="stopped at 7 of 9 bytes"):  # the connection dropped
+        data.fetch(tmp_path)
+    assert not any(path.suffix == ".feather" for path in tmp_path.iterdir())
+    promised["n"] = 7
+    seen = []
+    paths = data.fetch(tmp_path, on_progress=lambda name, done, total: seen.append((done, total)))
+    assert [path.read_bytes() for path in paths] == [b"feather"] * 3 and seen[0] == (7, 7)
+    monkeypatch.setattr(data.urllib.request, "urlopen", None)  # nothing is fetched twice
+    assert data.fetch(tmp_path) == paths
 
 
 # --- dynamics, senses, readout ------------------------------------------------------------------
@@ -303,15 +349,19 @@ def test_a_genome_round_trips_and_is_not_mistaken_for_another_brains(tmp_path, c
         ConnectomeGenome.load(cut)
     with pytest.raises(ValueError, match="not an evolved brain"):
         Genome.load(cut)
-    assert cli._weights_kind(str(cut)) == "evolved"
+    assert weights_kind(cut) == "evolved"
+    cut.write_bytes(b"")  # what a full disk leaves behind
+    with pytest.raises(ValueError, match="not a connectome brain"):
+        ConnectomeGenome.load(cut)
+    with pytest.raises(ValueError, match="not an evolved brain"):
+        Genome.load(cut)
+    assert weights_kind(cut) == "evolved"
     small = Genome.zeros(4).save(tmp_path / "mlp.npz")
     with pytest.raises(ValueError, match="not a connectome brain"):
         ConnectomeGenome.load(small)
     with pytest.raises(ValueError, match="not an evolved brain"):
         Genome.load(path)
-    assert (
-        cli._weights_kind(str(path)) == "connectome" and cli._weights_kind(str(small)) == "evolved"
-    )
+    assert weights_kind(path) == "connectome" and weights_kind(small) == "evolved"
 
 
 def test_the_brain_is_reproducible_remembers_within_a_life_and_forgets_at_birth(cache):
@@ -427,7 +477,22 @@ def test_a_flock_joins_as_many_owners_and_reports_every_life(cache):
     assert all(life.stats.lifespan > 0 and life.name for life in lives)
 
 
+class Idler:
+    """A brain that only notes what it was seeded with."""
+
+    def __init__(self) -> None:
+        self.seeds = []
+
+    def reset(self, seed=None) -> None:
+        self.seeds.append(seed)
+
+    def act(self, observation) -> int:
+        return 0
+
+
 def test_a_flock_of_ordinary_brains_and_its_refusals():
+    twins = [Idler(), Idler()]
+
     async def scenario():
         async with Server(ServerConfig(**FAST, config=SHORT)) as server:
             brains = [BRAINS["random"](seed=1), BRAINS["scripted"](seed=2)]
@@ -436,9 +501,18 @@ def test_a_flock_of_ordinary_brains_and_its_refusals():
                 await fly_flock(server.url, brains, ["a", "a"])
             with pytest.raises(ValueError, match="as many owners"):
                 await fly_flock(server.url, brains, ["a"])
+            with pytest.raises(ValueError, match="as many seeds"):
+                await fly_flock(server.url, brains, ["a", "b"], seeds=[1])
+            await fly_flock(server.url, twins, ["c", "d"], lives=2, seeds=[5, 6])
             return lives
 
     assert sorted(life.owner for life in asyncio.run(scenario())) == ["a", "b"]
+    # Every fly its own stream of chance, every life another: never one fly twice.
+    first, second = twins
+    assert first.seeds == [brain_seed((5 << 32) ^ 1), brain_seed((5 << 32) ^ 2)]
+    assert len(set(first.seeds + second.seeds)) == 4
+    nowhere = "ws://127.0.0.1:9"  # nothing to live: nobody is even called
+    assert asyncio.run(fly_flock(nowhere, twins, ["c", "d"], lives=0)) == []
 
 
 # --- the commands --------------------------------------------------------------------------------
@@ -457,6 +531,8 @@ def test_connectome_info_and_refusals_without_a_graph(tmp_path, monkeypatch, cap
     assert "connectome build" in capsys.readouterr().err
     assert cli.main(["flock", "--count", "0"]) == 1
     assert "at least 1" in capsys.readouterr().err
+    assert watch.main(["--brain", "connectome"]) == 1  # the dojo's own entry point, too
+    assert capsys.readouterr().err.startswith("neurogarden: ")
     monkeypatch.setitem(sys.modules, "pyarrow", None)  # scipy alone: the extra is half there
     assert cli.main(["connectome", "build"]) == 1
     assert "install neurogarden[connectome]" in capsys.readouterr().err
@@ -481,21 +557,29 @@ def test_evolve_and_flock_commands_on_a_cached_graph(tmp_path, cache, capsys):
     assert meta["total_generations"] == 2 and meta["parent"]["brain"] == "connectome"
     assert cli.main([*resume, "--control", "1", "--workers", "1"]) == 1
     assert "do not carry over" in capsys.readouterr().err
+    shuffled = str(tmp_path / "mine.npz")  # the control, bred under a name of its own
+    assert cli.main([*argv[:-2], "--control", "1", "--out", shuffled, "--workers", "1"]) == 0
+    capsys.readouterr()
     assert cli.main(["connectome", "info"]) == 0
     assert "graph full (>= 1 synapses): 400 neurons" in capsys.readouterr().out
 
     async def scenario():
         async with Server(ServerConfig(**FAST, config=SHORT)) as server:
             argv = ["flock", "--weights", out, "--count", "2", "--lives", "1", "--url", server.url]
-            return await asyncio.to_thread(cli.main, argv)
+            first = await asyncio.to_thread(cli.main, argv)
+            argv = ["flock", "--weights", shuffled, "--count", "1", "--lives", "1"]
+            return first, await asyncio.to_thread(cli.main, [*argv, "--url", server.url])
 
-    assert asyncio.run(scenario()) == 0
+    assert asyncio.run(scenario()) == (0, 0)
     printed = capsys.readouterr().out
-    assert "flying 2 connectome flies as cns-1 … cns-2" in printed
+    assert "flying 2 connectome flies as cns-1 … cns-2" in printed  # owners from the file's name
     assert "cns-1's" in printed and "cns-2's" in printed
+    assert (
+        "flying 1 connectome-random flies as mine-1 … mine-1" in printed and "mine-1's" in printed
+    )
 
 
-def test_a_server_whose_npc_cannot_think_lets_go_of_its_world(tmp_path, monkeypatch):
+def test_a_server_whose_npc_cannot_think_makes_no_world(tmp_path, monkeypatch):
     monkeypatch.setenv("NEUROGARDEN_CACHE", str(tmp_path / "empty"))  # no graph to think with
     data.forget()
     path = str(tmp_path / "world.db")
@@ -507,4 +591,4 @@ def test_a_server_whose_npc_cannot_think_lets_go_of_its_world(tmp_path, monkeypa
 
     with pytest.raises((ValueError, OSError)):
         asyncio.run(scenario())
-    Archive.open(path).close()  # not held: the server that never started closed it
+    assert not (tmp_path / "world.db").exists()  # refused before a world was made for it

@@ -219,7 +219,10 @@ def evolve(
     long run that is cut short has not been for nothing.
     """
     config = config if config is not None else EvolveConfig()
-    rng = np.random.default_rng(config.seed)
+    # A run that carries on draws on from where its ancestors stopped: the same seed again
+    # would breed on the same worlds and the same noise as its first generations did.
+    behind = 0 if parent is None else int(parent.get("total_generations", 0))
+    rng = np.random.default_rng([config.seed, behind] if behind else config.seed)
     trainable = config.trainable()
     if start is None:  # all-zero weights would idle every fly to death: start somewhere
         theta = trainable.initial(rng, config.init_scale)

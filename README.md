@@ -172,18 +172,20 @@ uv run neurogarden flock --brain connectome --count 10      # …and ten connect
 uv run neurogarden flock --brain connectome-random --count 3   # and three of the control
 ```
 
-`flock` runs N brains in one process, each its own owner (`cns-1` … `cns-10`)
-with its own lives and place in the hall of flies; connectome brains share one
-wiring and are stepped together. Unlike the small network, this brain has a
-memory: its network state persists from tick to tick within a life. Its speech
-bubble shows sixteen of its pooled descending features.
+`flock` runs N brains in one process, each its own owner (`cns-1` … `cns-10`;
+`rnd-…` for the control, the file's name for `--weights mine.npz`) with its own
+lives, its own stream of chance and its own place in the hall of flies;
+connectome brains share one wiring and are stepped together. Unlike the small
+network, this brain has a memory: its network state persists from tick to tick
+within a life. Its speech bubble shows sixteen of its pooled descending
+features.
 
 Breed your own readout (`--control SEED` breeds the control instead). The
 weights are written after every generation, so a long run can be stopped:
 
 ```bash
 uv run neurogarden evolve --brain connectome --out mine.npz --generations 30 --max-steps 1500
-uv run neurogarden flock --weights mine.npz --count 5
+uv run neurogarden flock --weights mine.npz --count 5       # owners mine-1 … mine-5
 ```
 
 On a CPU one update of the central graph costs a few milliseconds per fly, so

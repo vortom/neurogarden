@@ -8,15 +8,16 @@ import argparse
 import asyncio
 import json
 import logging
+import re
 import sys
 import time
-import zipfile
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 
 from neurogarden.brains import BRAINS, WEIGHTED, ConnectomeGenome, Genome
+from neurogarden.brains.evolved import weights_kind
 from neurogarden.connectome import data as connectome_data
 from neurogarden.connectome.data import VARIANTS
 from neurogarden.dojo.evolve import BRAINS as BREEDABLE
@@ -249,21 +250,19 @@ def cmd_serve(args) -> int:
     return 0
 
 
-def _weights_kind(path: str) -> str:
-    """Which brain a weights file belongs to, from its own meta."""
-    try:
-        with np.load(path) as file:
-            meta = json.loads(str(file["meta"])) if "meta" in file else {}
-    except (ValueError, TypeError, KeyError, zipfile.BadZipFile):
-        return "evolved"  # not readable as weights: the evolved loader says why
-    return meta.get("brain", "evolved") if isinstance(meta, dict) else "evolved"
+def _obituary(owner: str, name: str, lineage: int, stats) -> str:
+    causes = ", ".join(stats.death_causes) or "unknown"
+    return (
+        f"{owner}'s {name} (#{lineage}) lived {stats.lifespan} ticks "
+        f"({stats.days} days) | {causes} | bites {stats.bites} drinks {stats.drinks}"
+    )
 
 
 def _make_brain(args, seed: int | None = None):
     seed = args.seed if seed is None else seed
     if args.weights is None:
         return BRAINS[args.brain or "scripted"](seed=seed)
-    kind = args.brain or _weights_kind(args.weights)
+    kind = args.brain or weights_kind(args.weights)
     if kind not in WEIGHTED:
         raise ValueError("--weights is for --brain evolved or connectome")
     return WEIGHTED[kind](seed=seed, path=args.weights)
@@ -276,12 +275,7 @@ def cmd_join(args) -> int:
         return _refuse(err)
 
     def report(fly) -> None:
-        stats = fly.stats
-        causes = ", ".join(stats.death_causes) or "unknown"
-        print(
-            f"{args.owner}'s {fly.name} (#{fly.lineage}) lived {stats.lifespan} ticks "
-            f"({stats.days} days) | {causes} | bites {stats.bites} drinks {stats.drinks}"
-        )
+        print(_obituary(args.owner, fly.name, fly.lineage, fly.stats))
 
     try:
         run_brain(
@@ -540,7 +534,7 @@ def cmd_evolve(args) -> int:
     try:
         start = parent = None
         if args.start is not None:
-            loader = ConnectomeGenome if _weights_kind(args.start) == "connectome" else Genome
+            loader = ConnectomeGenome if weights_kind(args.start) == "connectome" else Genome
             start, parent = loader.load(args.start)
         # Carrying on from weights keeps their shape and settings unless told otherwise.
         inherited = parent or {}
@@ -626,8 +620,7 @@ def cmd_evolve(args) -> int:
         saved.append(len(result.history))
 
     try:
-        result = evolve(config, start=start, on_generation=report, parent=parent, checkpoint=keep)
-        keep(result)
+        evolve(config, start=start, on_generation=report, parent=parent, checkpoint=keep)
     except KeyboardInterrupt:
         kept = f"{out} holds generation {saved[-1]}" if saved else "nothing written"
         print(f"stopped; {kept}", file=sys.stderr)
@@ -642,25 +635,34 @@ def cmd_flock(args) -> int:
     if args.count < 1:
         return _refuse(ValueError("--count must be at least 1"))
     try:
-        kind = args.brain or (_weights_kind(args.weights) if args.weights else "connectome")
+        kind = args.brain or (weights_kind(args.weights) if args.weights else "connectome")
         args.brain = kind
-        prefix = args.owner_prefix or {"connectome": "cns", "connectome-random": "rnd"}.get(
-            kind, kind
-        )
-        brains = [_make_brain(args, seed=args.seed + index) for index in range(args.count)]
+        if args.weights and kind == "connectome":  # bred on a shuffled graph: the control,
+            _, bred = ConnectomeGenome.load(args.weights)  # whatever the file is called
+            kind = "connectome" if bred.get("control") is None else "connectome-random"
+        if args.owner_prefix:
+            prefix = args.owner_prefix
+        elif args.weights:  # its own owners, so it does not take over the shipped flock's flies
+            prefix = re.sub(r"[^A-Za-z0-9_.-]", "-", Path(args.weights).stem)[:48] or kind
+        else:
+            prefix = {"connectome": "cns", "connectome-random": "rnd"}.get(kind, kind)
+        seeds = [args.seed + index for index in range(args.count)]
+        brains = [_make_brain(args, seed=seed) for seed in seeds]
         owners = [f"{prefix}-{index + 1}" for index in range(args.count)]
 
         def report(life) -> None:
-            stats = life.stats
-            causes = ", ".join(stats.death_causes) or "unknown"
-            print(
-                f"{life.owner}'s {life.name} (#{life.lineage}) lived {stats.lifespan} ticks "
-                f"({stats.days} days) | {causes} | bites {stats.bites} drinks {stats.drinks}",
-                flush=True,
-            )
+            print(_obituary(life.owner, life.name, life.lineage, life.stats), flush=True)
 
         print(f"flying {args.count} {kind} flies as {owners[0]} … {owners[-1]}", flush=True)
-        run_flock(args.url, brains, owners, token=args.token, lives=args.lives, on_life=report)
+        run_flock(
+            args.url,
+            brains,
+            owners,
+            token=args.token,
+            lives=args.lives,
+            on_life=report,
+            seeds=seeds,
+        )
     except (*_REFUSALS, OSError) as err:
         return _refuse(err)
     except KeyboardInterrupt:
@@ -696,6 +698,8 @@ def cmd_connectome(args) -> int:
                     f"{graph['neurons']} neurons, {graph['connections']} connections, "
                     f"{graph['digest']}"
                 )
+            for name in report["broken"]:
+                print(f"  {name}: cannot be read; run `neurogarden connectome build` again")
             if not report["graphs"]:
                 print("  no graph built yet: `neurogarden connectome build`")
     except (ValueError, OSError) as err:

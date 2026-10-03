@@ -38,6 +38,9 @@ CENTRAL = (
 SIGN = {"acetylcholine": 1.0, "gaba": -1.0, "glutamate": -1.0, "histamine": -1.0}
 DEFAULT_MIN_SYNAPSES = 5
 _CHUNK = 1 << 20
+_TIMEOUT = 60  # seconds without a byte before a download gives up
+
+_UNREADABLE = (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile)  # not an .npz of ours
 
 _wirings: dict[tuple, Wiring] = {}  # loaded graphs, shared by every brain in the process
 
@@ -72,7 +75,10 @@ def fetch(
         if target.exists():
             continue
         partial = target.with_name(target.name + ".part")
-        with urllib.request.urlopen(BASE_URL + name) as response, open(partial, "wb") as out:
+        with (
+            urllib.request.urlopen(BASE_URL + name, timeout=_TIMEOUT) as response,
+            open(partial, "wb") as out,
+        ):
             total = response.headers.get("Content-Length")
             total = int(total) if total else None
             done = 0
@@ -81,6 +87,8 @@ def fetch(
                 done += len(chunk)
                 if on_progress is not None:
                     on_progress(name, done, total)
+        if total is not None and done != total:  # a dropped connection ends the read quietly
+            raise OSError(f"{name}: the download stopped at {done} of {total} bytes; fetch again")
         partial.replace(target)  # a file is either whole or absent
     return paths
 
@@ -234,7 +242,7 @@ def load(
                 superclass, klass = table["superclass"], table["klass"]
                 stamped = json.loads(str(table["meta"])).get("digest")
             matrix = sparse.load_npz(graph_path).tocsr()
-        except (OSError, ValueError, KeyError, zipfile.BadZipFile) as err:
+        except _UNREADABLE as err:
             raise ValueError(f"the cached graph cannot be read ({err}): {again}") from None
         wiring = Wiring(
             matrix=matrix,
@@ -255,14 +263,18 @@ def forget() -> None:
 
 
 def info(cache: Path | None = None) -> dict:
-    """What the cache holds: source files and built graphs, with sizes."""
+    """What the cache holds: source files and built graphs, with sizes; `broken` names the
+    neuron tables that cannot be read (this is what one asks when the cache misbehaves)."""
     cache = cache or cache_dir()
     sources = {
         key: (cache / name).stat().st_size if (cache / name).exists() else None
         for key, name in FILES.items()
     }
-    graphs = []
+    graphs, broken = [], []
     for path in sorted(cache.glob("graph-*.neurons.npz")) if cache.exists() else []:
-        with np.load(path) as table:
-            graphs.append(json.loads(str(table["meta"])))
-    return {"cache": str(cache), "sources": sources, "graphs": graphs}
+        try:
+            with np.load(path) as table:
+                graphs.append(json.loads(str(table["meta"])))
+        except _UNREADABLE:
+            broken.append(path.name)
+    return {"cache": str(cache), "sources": sources, "graphs": graphs, "broken": broken}

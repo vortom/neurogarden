@@ -11,9 +11,7 @@ simulated fly.
 from __future__ import annotations
 
 import json
-import zipfile
 from dataclasses import dataclass
-from importlib import resources
 from pathlib import Path
 
 import numpy as np
@@ -34,7 +32,7 @@ from neurogarden.dojo.features import DEFAULT_AGE_SCALE, FEATURES_VERSION, TINY_
 from neurogarden.engine.body import Action
 from neurogarden.engine.rng import SplitMix64
 
-from .evolved import choose, sparkline
+from .evolved import choose, default_weights, read_weights, sparkline, weights_meta
 
 DEFAULT_WEIGHTS = "connectome-v1.npz"
 CONTROL_WEIGHTS = "connectome-random-v1.npz"
@@ -116,42 +114,24 @@ class ConnectomeGenome:
     @classmethod
     def load(cls, source) -> tuple[ConnectomeGenome, dict]:
         """From a path or a packaged resource. ValueError for anything that is not one."""
-        name = str(source) if isinstance(source, str | Path) else getattr(source, "name", source)
-        try:
-            if hasattr(source, "open") and not isinstance(source, Path):
-                with source.open("rb") as handle, np.load(handle) as file:
-                    genome, meta = cls._unpack(file)
-            else:
-                with np.load(source) as file:
-                    genome, meta = cls._unpack(file)
-        except (KeyError, ValueError, TypeError, OSError, zipfile.BadZipFile) as err:
-            if isinstance(err, FileNotFoundError):
-                raise
-            raise ValueError(f"{name}: not a connectome brain's weights ({err})") from None
-        if meta.get("features_version", FEATURES_VERSION) != FEATURES_VERSION:
-            raise ValueError(f"{name}: features_version {meta['features_version']} is not ours")
+        genome, meta = read_weights(source, "a connectome brain's weights", cls._unpack)
         if meta.get("model_version", MODEL_VERSION) != MODEL_VERSION:
             raise ValueError(
-                f"{name}: bred for connectome model {meta['model_version']}, this is "
-                f"{MODEL_VERSION} (the senses or the readout changed since)"
+                f"{getattr(source, 'name', source)}: bred for connectome model "
+                f"{meta['model_version']}, this is {MODEL_VERSION} (the senses or the readout "
+                "changed since)"
             )
         return genome, meta
 
     @classmethod
     def _unpack(cls, file) -> tuple[ConnectomeGenome, dict]:
-        meta = json.loads(str(file["meta"])) if "meta" in file else {}
-        if not isinstance(meta, dict):
-            raise ValueError("meta is not an object")
+        meta = weights_meta(file)
         names = ("gains", "log_gain", "w", "b")
         genome = cls(*(np.asarray(file[part], dtype=np.float32) for part in names))
         for part, shape in zip(genome.parts(), cls.zeros().parts(), strict=True):
             if part.shape != shape.shape:
                 raise ValueError(f"a {part.shape} array where {shape.shape} was expected")
         return genome, meta
-
-
-def default_weights(name: str = DEFAULT_WEIGHTS):
-    return resources.files("neurogarden.brains").joinpath("weights", name)
 
 
 class ConnectomeBrain:

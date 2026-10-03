@@ -113,6 +113,13 @@ class Server:
         if not _is_loopback(config.host) and config.token == DEFAULT_TOKEN:
             raise ValueError(f"refusing to bind {config.host} with the default token; pass --token")
         self.config = config
+        # Brains first: one that cannot be built (no weights, no graph) is refused before a
+        # world is created for it.
+        self._npcs = [
+            (f"npc-{kind}-{index}", BRAINS[kind](seed=index))
+            for kind, count in config.npcs
+            for index in range(1, count + 1)
+        ]
         self.archive = Archive.open(config.archive)
         try:
             info = self.archive.world_info
@@ -145,13 +152,10 @@ class Server:
         self._ticker: asyncio.Task | None = None
 
     def _hatch_npcs(self) -> None:
-        for kind, count in self.config.npcs:
-            for index in range(1, count + 1):
-                brain = BRAINS[kind](seed=index)
-                owner = f"npc-{kind}-{index}"
-                port = LocalPort(brain, owner, self.runner, self.runner.catalog.bodies["fly"])
-                self.runner.attach(port)
-                self.runner.request_join(port)
+        for owner, brain in self._npcs:
+            port = LocalPort(brain, owner, self.runner, self.runner.catalog.bodies["fly"])
+            self.runner.attach(port)
+            self.runner.request_join(port)
 
     async def __aenter__(self) -> Server:
         try:
@@ -168,8 +172,8 @@ class Server:
                 origins=allowed_origins(self.config.host, self.config.port),
                 process_request=make_process_request(self.config.web),
             )
-        except BaseException:  # a brain that cannot be built, a port that is taken:
-            self.archive.close()  # nobody will call __aexit__, so let go of the world here
+        except BaseException:  # the port is taken: nobody will call __aexit__,
+            self.archive.close()  # so let go of the world here
             raise
         self.port = self._ws.sockets[0].getsockname()[1]
         self._ticker = asyncio.get_running_loop().create_task(self.runner.run(self.stop))
