@@ -22,7 +22,9 @@ GROUP_MAX = 128  # neurons one feature drives at most, so no sense shouts over t
 # What the learned numbers lean on besides the graph: which neurons each feature drives, how
 # the descending neurons are pooled, the update rule. Change any of them and weights bred
 # before mean something else — bump this, and old files are refused instead of misread.
-MODEL_VERSION = 1
+# 2: the gain is held at or below 1 and the pooled features are scaled for that (1 let the
+# network run at gain 3, where it kept activity of its own).
+MODEL_VERSION = 2
 
 _EXTRA = "the connectome brain needs scipy: install neurogarden[connectome]"
 

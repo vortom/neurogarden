@@ -332,7 +332,10 @@ def test_a_genome_round_trips_and_is_not_mistaken_for_another_brains(tmp_path, c
     vector = spec.initial(np.random.default_rng(0))
     genome = spec.genome(vector)
     assert genome.size == spec.size == 481 and np.array_equal(genome.to_vector(), vector)
-    assert genome.gain == pytest.approx(3.0) and np.all(genome.gains == 1.0)
+    assert genome.gain == pytest.approx(0.5) and np.all(genome.gains == 1.0)
+    loud = spec.genome(vector)
+    loud.log_gain[:] = np.log(3.0)  # however it was bred, the network stays a contraction:
+    assert loud.gain == 1.0  # above 1 it would stop forgetting how a life began
     with pytest.raises(ValueError, match="expected 481"):
         genome.with_vector(np.zeros(3, np.float32))
     path = genome.save(tmp_path / "cns", spec.describe())
@@ -341,9 +344,9 @@ def test_a_genome_round_trips_and_is_not_mistaken_for_another_brains(tmp_path, c
     assert np.array_equal(loaded.to_vector(), vector)
     assert meta["brain"] == "connectome" and meta["digest"] == data.load("full", 1).digest
     assert (meta["graph"], meta["min_synapses"], meta["substeps"]) == ("full", 1, 3)
-    assert meta["model_version"] == 1
-    later = genome.save(tmp_path / "later.npz", {**spec.describe(), "model_version": 2})
-    with pytest.raises(ValueError, match="connectome model 2"):
+    assert meta["model_version"] == 2
+    later = genome.save(tmp_path / "later.npz", {**spec.describe(), "model_version": 3})
+    with pytest.raises(ValueError, match="connectome model 3"):
         ConnectomeGenome.load(later)  # other senses or readout: the numbers mean other things
     cut = tmp_path / "cut.npz"
     cut.write_bytes(path.read_bytes()[:60])
@@ -483,6 +486,14 @@ def test_fitting_a_readout_finds_the_linear_teacher_behind_the_answers():
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(distil_module, "_FIT_STEPS", 2)  # cut short: it says so
         assert not fit_readout(features, answers, l2=0.0)[4]
+    # Loud features and faint ones are heard alike: the fit is the same whatever their units.
+    units = 10.0 ** rng.uniform(-4, 1, size=6)
+    scaled_w, scaled_b, same_agreement, same_divergence, _ = fit_readout(
+        features * units, answers, l2=1e-4
+    )
+    w, b, agreement, divergence, _ = fit_readout(features, answers, l2=1e-4)
+    assert same_agreement == agreement and same_divergence == pytest.approx(divergence, rel=1e-3)
+    assert np.allclose((features * units) @ scaled_w + scaled_b, features @ w + b, atol=1e-3)
     sure = np.eye(7)[answers.argmax(axis=1)]  # a teacher that never doubts, and never rests:
     sure[:, 6] = 0  # the bias of the action it never takes stays finite
     sure[sure.sum(axis=1) == 0, 0] = 1
@@ -534,7 +545,7 @@ def test_distilling_teaches_the_readout_round_by_round(tmp_path, cache):
     spread = distil(DistilConfig(**{**LESSON, "workers": 2}))  # however the lives are flown
     assert np.array_equal(spread.genome.to_vector(), first.genome.to_vector())
     genome = first.genome
-    assert genome.w.any() and np.all(genome.gains == 1.0) and genome.gain == pytest.approx(3.0)
+    assert genome.w.any() and np.all(genome.gains == 1.0) and genome.gain == pytest.approx(0.5)
     meta = first.meta
     assert (meta["brain"], meta["graph"], meta["temperature"]) == ("connectome", "full", 0.5)
     assert meta["digest"] == data.load("full", 1).digest and meta["total_generations"] == 0
@@ -565,10 +576,10 @@ def test_distilling_teaches_the_readout_round_by_round(tmp_path, cache):
 
 
 def test_the_readout_can_see_more_or_fewer_features(tmp_path, cache):
-    narrow = distil(DistilConfig(**LESSON, pooled=16, gain=2.0, input_gain=2.0))
+    narrow = distil(DistilConfig(**LESSON, pooled=16, gain=0.9, input_gain=2.0))
     genome = narrow.genome
     assert genome.pooled == 16 and genome.size == 25 + 1 + 16 * 7 + 7
-    assert np.all(genome.gains == 2.0) and genome.gain == pytest.approx(2.0)
+    assert np.all(genome.gains == 2.0) and genome.gain == pytest.approx(0.9)
     assert narrow.meta["pooled"] == 16 and narrow.meta["distilled"]["input_gain"] == 2.0
     path = genome.save(tmp_path / "narrow.npz", narrow.meta)
     brain = ConnectomeBrain(path=path)
@@ -586,6 +597,8 @@ def test_distil_refuses_what_it_cannot_teach(tmp_path, cache):
     for wrong in (dict(rounds=0), dict(temperature=0.0), dict(pooled=0), dict(gain=0.0)):
         with pytest.raises(ValueError, match="must"):
             DistilConfig(**{**LESSON, **wrong})
+    with pytest.raises(ValueError, match="stops forgetting how a life began"):
+        DistilConfig(**{**LESSON, "gain": 1.5})
     with pytest.raises(ValueError, match="graph must be"):
         DistilConfig(graph="thorax")
     spec = trainable()

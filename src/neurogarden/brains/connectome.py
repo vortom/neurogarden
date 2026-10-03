@@ -36,8 +36,16 @@ from .evolved import choose, default_weights, read_weights, sparkline, weights_m
 
 DEFAULT_WEIGHTS = "connectome-v1.npz"
 CONTROL_WEIGHTS = "connectome-random-v1.npz"
-READOUT_GAIN = 10.0  # pooled descending activity is small; this puts the first scores near 1
-INITIAL_GAIN = 3.0  # the network gain evolution starts from: enough to carry a smell through
+# The network gain stays at or below 1. There every update is a contraction (each neuron's
+# inputs sum to at most 1 and tanh never stretches), so the network forgets how a life began
+# within a few ticks and its state is an echo of what the fly senses. Above 1 it keeps
+# activity of its own: two copies hearing the same life from different beginnings never meet
+# (measured at 1.2 and up), and a readout taught in one such regime is lost in another — a
+# fly born at another hour, or one whose flock was restarted. Below 1 nothing is lost on the
+# way either: the senses are read back from the pooled features better at 0.5 than at 3.
+GAIN_CEILING = 1.0
+INITIAL_GAIN = 0.5  # the network gain a new brain starts with
+READOUT_GAIN = 500.0  # an echo is faint: this brings the pooled features to about 1
 THOUGHT_NEURONS = 16
 _ACTIONS = len(Action)
 
@@ -82,7 +90,8 @@ class ConnectomeGenome:
 
     @property
     def gain(self) -> float:
-        return float(np.exp(self.log_gain[0]))
+        """The network gain, held at the ceiling whatever the number was bred to."""
+        return float(min(np.exp(self.log_gain[0]), GAIN_CEILING))
 
     def parts(self) -> tuple[np.ndarray, ...]:
         return (self.gains, self.log_gain, self.w, self.b)

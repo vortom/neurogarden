@@ -32,7 +32,12 @@ from pathlib import Path
 import numpy as np
 
 from neurogarden.brains.base import brain_seed
-from neurogarden.brains.connectome import INITIAL_GAIN, ConnectomeGenome, ConnectomeTrainable
+from neurogarden.brains.connectome import (
+    GAIN_CEILING,
+    INITIAL_GAIN,
+    ConnectomeGenome,
+    ConnectomeTrainable,
+)
 from neurogarden.brains.evolved import EvolvedBrain
 from neurogarden.connectome.data import DEFAULT_MIN_SYNAPSES, VARIANTS
 from neurogarden.connectome.model import DEFAULT_SUBSTEPS, POOLED, require_scipy
@@ -75,6 +80,11 @@ class DistilConfig:
         if self.l2 < 0 or min(self.temperature, self.gain, self.input_gain) <= 0:
             raise ValueError(
                 "l2 must not be negative; temperature, gain and input_gain must be positive"
+            )
+        if self.gain > GAIN_CEILING:
+            raise ValueError(
+                f"gain must be at most {GAIN_CEILING}: above it the network keeps activity of "
+                "its own and stops forgetting how a life began"
             )
         if self.workers is not None and self.workers < 0:
             raise ValueError("workers must be None (all cores), 0 or 1 (in-process), or more")
@@ -196,11 +206,18 @@ def fit_readout(
     `l2` holds both `w` and `b`: without it, the bias of an action a sure teacher never
     takes would run off towards minus infinity. `settled` is False when the fit ran out of
     iterations; agreement and divergence are measured on the moments it was fitted to.
+
+    The fit is made on standardised features — each in units of its own spread — and handed
+    back for the features as they are: some pooled features move thirty times more than
+    others, and a penalty on raw weights would silence the quiet ones.
     """
     require_scipy()
     from scipy.optimize import minimize
 
-    x = np.asarray(features, np.float64)
+    raw = np.asarray(features, np.float64)
+    centre, spread = raw.mean(axis=0), raw.std(axis=0)
+    spread = np.where(spread > 1e-12, spread, 1.0)  # a feature that never moves says nothing
+    x = (raw - centre) / spread
     p = np.asarray(targets, np.float64)
     ticks, width = x.shape
     actions = p.shape[1]
@@ -223,6 +240,8 @@ def fit_readout(
     agreement = float((log_p.argmax(axis=1) == p.argmax(axis=1)).mean())
     divergence = float((p * (np.log(p + 1e-12) - log_p)).sum(axis=1).mean())
     w, b = found.x[: width * actions].reshape(width, actions), found.x[width * actions :]
+    w = w / spread[:, None]  # back to the features as the brain will see them
+    b = b - centre @ w
     return w, b, agreement, divergence, bool(found.success)
 
 
