@@ -139,6 +139,52 @@ drawing from the softmax of its scores at the temperature it was evolved at (a
 policy that always does the same thing gives evolution nothing to rank), with
 its own seeded generator, so a life is reproducible.
 
+## The connectome fly
+
+A fly that thinks with real wiring. `ConnectomeBrain` runs a leaky rate network
+on the central brain of the MaleCNS connectome — 50,668 neurons and 2,425,802
+connections of at least five synapses, out of the 165,122 traced neurons and
+25,563,197 connections of the whole dataset (Janelia FlyEM, MaleCNS v1.0,
+CC-BY 4.0). Smell, touch, the body's needs and light drive fixed groups of
+sensory neurons; the activity of the 1,314 descending neurons, pooled, is read
+out into the seven actions.
+
+What this is, and is not: the *connections* are real. The neuron equation, the
+signs given to transmitters, which neurons "smell fruit" and the readout are
+this project's modelling choices, and the readout (481 numbers in all) is
+learned by the same evolution that bred the small network — the wiring is never
+trained. It is a model inspired by real wiring, not a simulated fly. To keep
+that honest, every connectome brain ships with a **control**: the same brain
+bred the same way on a graph where each neuron receives another neuron's
+inputs (`connectome-random`). If the control lives as long, the wiring is not
+what is doing the work — the balance guard prints both.
+
+```bash
+uv sync --extra connectome                     # scipy + pyarrow
+uv run neurogarden connectome fetch            # three files, ~1.1 GB, into ~/.cache/neurogarden/malecns
+uv run neurogarden connectome build            # the central graph; a minute or two
+uv run neurogarden serve                                    # a garden…
+uv run neurogarden flock --brain connectome --count 10      # …and ten connectome flies in it
+uv run neurogarden flock --brain connectome-random --count 3   # and three of the control
+```
+
+`flock` runs N brains in one process, each its own owner (`cns-1` … `cns-10`)
+with its own lives and place in the hall of flies; connectome brains share one
+wiring and are stepped together. Unlike the small network, this brain has a
+memory: its network state persists from tick to tick within a life. Its speech
+bubble shows sixteen of its pooled descending features.
+
+Breed your own readout (`--control SEED` breeds the control instead):
+
+```bash
+uv run neurogarden evolve --brain connectome --out mine.npz --generations 30 --max-steps 1500
+uv run neurogarden flock --weights mine.npz --count 5
+```
+
+On a CPU one update of the central graph costs a few milliseconds per fly, so
+ten flies fit a 5 ticks/s world. The full graph is a GPU job: the same model
+runs on torch when it is installed (`backend="torch"`); see the roadmap.
+
 ## Quick start: the dojo
 
 ```bash
