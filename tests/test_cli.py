@@ -251,7 +251,10 @@ def test_replay_shows_a_life_frame_by_frame(garden, capsys):
     argv = ["replay", "--archive", path, "--owner", "alice", "--life", "1", "--ascii"]
     assert cli.main([*argv, "--frames", "3", "--fps", "1000"]) == 0
     out = capsys.readouterr().out
-    assert out.count("ghost: alice's") == 3 and ("tick 1 of" in out or "tick 0 of" in out)
+    assert out.count("ghost: alice's") == 3
+    shown = [(int(tick), int(born)) for tick, born in re.findall(r"tick (\d+) of (\d+)–", out)]
+    born = shown[0][1]  # whenever she hatched: a busy machine joins her a tick or two late
+    assert shown == [(born, born), (born + 1, born), (born + 2, born)]
     assert cli.main([*argv, "--fps", "1000"]) == 0  # the whole life, to its last frame
     assert "dies of starvation" in capsys.readouterr().out
     assert cli.main(["replay", "--archive", path, "--owner", "alice", "--life", "7"]) == 1
