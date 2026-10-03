@@ -731,10 +731,17 @@ def test_evolve_and_flock_commands_on_a_cached_graph(tmp_path, cache, capsys):
     carry_on = ["evolve", "--start", taught + ".npz", "--out", bred, "--generations", "1"]
     carry_on += ["--population", "2", "--episodes", "1", "--max-steps", "20", "--workers", "1"]
     assert cli.main(carry_on) == 0
-    capsys.readouterr()
+    # A taught brain is carried on in small steps: the usual ones would undo the lesson.
+    assert "sigma 0.01, learning rate 0.0005" in capsys.readouterr().out
     with np.load(bred) as file:
         meta = json.loads(str(file["meta"]))
     assert meta["pooled"] == 16 and meta["parent"]["distilled"]["rounds_done"] == 2
+    assert (meta["sigma"], meta["learning_rate"]) == (0.01, 0.0005)
+    further = [*carry_on[:2], bred, *carry_on[3:]]  # and what was bred from it keeps them
+    assert cli.main(further) == 0
+    assert "sigma 0.01, learning rate 0.0005" in capsys.readouterr().out
+    assert cli.main([*carry_on, "--sigma", "0.2"]) == 0  # unless told otherwise
+    assert "sigma 0.2, learning rate 0.0005" in capsys.readouterr().out
     assert cli.main([*lesson, "--teacher", out]) == 1  # a connectome brain is no teacher
     assert "not an evolved brain" in capsys.readouterr().err
     shuffled = str(tmp_path / "mine.npz")  # the control, bred under a name of its own

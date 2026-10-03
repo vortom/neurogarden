@@ -202,9 +202,12 @@ network, this brain has a memory: its network state persists from tick to tick
 within a life. Its speech bubble shows sixteen of its pooled descending
 features.
 
-Teach your own (`--control SEED` teaches the control instead), and let
-evolution carry on from there if you like: it breeds the input side too, and
-writes the weights after every generation, so a long run can be stopped.
+Teach your own (`--control SEED` teaches the control instead). Evolution can
+carry on from a taught brain — it breeds the input side too, and writes the
+weights after every generation, so a long run can be stopped — but only in
+small steps, which `evolve --start` takes by itself: at the usual step size one
+generation undoes the lesson. Whether evolution then improves on the lesson is
+not measured yet.
 
 ```bash
 uv run neurogarden distil --out mine.npz --rounds 8 --lives 8   # the shipped lesson (--seed 1): a quarter of an hour

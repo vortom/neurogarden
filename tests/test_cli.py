@@ -360,8 +360,9 @@ def test_evolve_writes_weights_that_join_can_fly(tmp_path, capsys):
     assert cli.main(argv) == 0
     printed = capsys.readouterr().out
     assert "evolving a 3-neuron brain" in printed and "gen   1/1" in printed and "wrote" in printed
-    assert cli.main([*argv, "--start", out, "--out", str(tmp_path / "again.npz")]) == 0
-    capsys.readouterr()
+    again = str(tmp_path / "again.npz")
+    assert cli.main([*argv, "--start", out, "--out", again, "--sigma", "0.3"]) == 0
+    assert "sigma 0.3, learning rate 0.05" in capsys.readouterr().out
 
     from neurogarden.engine import Config
 
@@ -384,7 +385,6 @@ def test_evolve_writes_weights_that_join_can_fly(tmp_path, capsys):
     assert "for --brain evolved" in capsys.readouterr().err
     assert cli.main(["join", "--weights", str(tmp_path / "nope.npz"), "--owner", "x"]) == 1
     assert "No such file" in capsys.readouterr().err  # --weights alone means evolved
-    again = str(tmp_path / "again.npz")
     assert (
         cli.main(
             [
@@ -407,7 +407,8 @@ def test_evolve_writes_weights_that_join_can_fly(tmp_path, capsys):
         )
         == 0
     )
-    assert "evolving a 3-neuron brain" in capsys.readouterr().out  # inherited from --start
+    printed = capsys.readouterr().out  # the shape and the step size: inherited from --start
+    assert "evolving a 3-neuron brain" in printed and "sigma 0.3" in printed
     assert (
         cli.main(["evolve", "--start", again, "--out", out, "--hidden", "5", "--workers", "1"]) == 1
     )

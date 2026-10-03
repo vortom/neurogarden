@@ -24,7 +24,7 @@ from neurogarden.connectome.data import VARIANTS
 from neurogarden.connectome.model import POOLED
 from neurogarden.dojo.distil import DistilConfig, distil
 from neurogarden.dojo.evolve import BRAINS as BREEDABLE
-from neurogarden.dojo.evolve import EvolveConfig, evolve
+from neurogarden.dojo.evolve import FINE_LEARNING_RATE, FINE_SIGMA, EvolveConfig, evolve
 from neurogarden.dojo.render_ansi import AgentGlimpse, View, render_view
 from neurogarden.dojo.stats import FITNESSES
 from neurogarden.engine import RULES_VERSION
@@ -165,8 +165,16 @@ def build_parser() -> argparse.ArgumentParser:
     evolve_cmd.add_argument("--population", type=int, default=EvolveConfig.population)
     evolve_cmd.add_argument("--episodes", type=int, default=EvolveConfig.episodes)
     evolve_cmd.add_argument("--max-steps", type=int, default=EvolveConfig.max_steps)
-    evolve_cmd.add_argument("--sigma", type=float, default=EvolveConfig.sigma)
-    evolve_cmd.add_argument("--learning-rate", type=float, default=EvolveConfig.learning_rate)
+    evolve_cmd.add_argument(
+        "--sigma", type=float, default=None,
+        help=f"how far a perturbation reaches (default {EvolveConfig.sigma}; carrying on: the "
+        f"start's; from a taught brain {FINE_SIGMA})",
+    )  # fmt: skip
+    evolve_cmd.add_argument(
+        "--learning-rate", type=float, default=None,
+        help=f"default {EvolveConfig.learning_rate}; carrying on: the start's; from a taught "
+        f"brain {FINE_LEARNING_RATE}",
+    )  # fmt: skip
     evolve_cmd.add_argument(
         "--hidden", type=int, default=None, help=f"neurons (default {EvolveConfig.hidden})"
     )
@@ -614,6 +622,14 @@ def cmd_evolve(args) -> int:
         def setting(given, key):
             return given if given is not None else inherited.get(key, getattr(EvolveConfig, key))
 
+        # A taught brain has never been bred, so it has no step sizes to hand on: small ones,
+        # or the first generation undoes the lesson.
+        taught = bool(inherited.get("distilled")) and "sigma" not in inherited
+        steps = {"sigma": FINE_SIGMA, "learning_rate": FINE_LEARNING_RATE} if taught else {}
+
+        def step(given, key):
+            return given if given is not None else steps.get(key, setting(None, key))
+
         config = EvolveConfig(
             brain=args.brain or inherited.get("brain") or EvolveConfig.brain,
             graph=args.graph or inherited.get("graph") or EvolveConfig.graph,
@@ -624,8 +640,8 @@ def cmd_evolve(args) -> int:
             pooled=args.pooled if args.pooled is not None else getattr(start, "pooled", POOLED),
             generations=args.generations,
             population=args.population,
-            sigma=args.sigma,
-            learning_rate=args.learning_rate,
+            sigma=step(args.sigma, "sigma"),
+            learning_rate=step(args.learning_rate, "learning_rate"),
             hidden=(
                 args.hidden
                 if args.hidden is not None
@@ -674,7 +690,8 @@ def cmd_evolve(args) -> int:
     print(
         f"evolving {what}: {config.generations} generations of "
         f"{config.population}, {config.episodes} lives each up to {config.max_steps} ticks, "
-        f"fitness {config.fitness}, temperature {config.temperature}"
+        f"fitness {config.fitness}, temperature {config.temperature}, sigma {config.sigma}, "
+        f"learning rate {config.learning_rate}"
     )
     out, keep, saved = _keeper(args.out)
     try:

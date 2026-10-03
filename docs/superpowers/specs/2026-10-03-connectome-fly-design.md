@@ -211,9 +211,14 @@ when available; real GPU runs happen on the owner's machine), a spiking model.
   recover fruit smell at 0.24, humidity 0.40, nest smell 0.11, touch 0.11,
   body 0.09, light 0.58; all 1,314 descending neurons recover 0.66, 0.78,
   0.14, 0.47, 0.32, 0.97. So the pooling loses most of what reaches the
-  descending neurons, and not everything reaches them. A wider readout (256
-  features) fitted better and did not live longer; leak 1.0, six updates a
-  tick and other gains were no better than the defaults (gain 2 with doubled
+  descending neurons, and not everything reaches them. The same measurement on
+  control 1: pooled 0.84, 0.82, 0.59, 0.23, 0.19, 0.91; all descending neurons
+  0.94, 0.94, 0.90, 0.51, 0.53, 0.99. The shuffled graph spreads every sense
+  over the descending neurons; the fly's wiring does not, and the gap is
+  widest for smell (fruit 0.24 against 0.84 in the pooled features). That is
+  the measured reason the control learns the lesson better. A wider readout
+  (256 features) fitted better and did not live longer; leak 1.0, six updates
+  a tick and other gains were no better than the defaults (gain 2 with doubled
   input fits slightly better).
 - *How they live.* The shipped lesson is eight rounds of eight lives of up to
   2400 ticks (`distil --rounds 8 --lives 8 --seed 1`, a quarter of an hour on
@@ -287,7 +292,15 @@ when available; real GPU runs happen on the owner's machine), a spiking model.
   is stopped: a connectome run takes an hour and a crash used to leave nothing.
 - `--weights FILE` alone picks the brain: the file says whether it is a small
   network or a connectome readout. `evolve --start FILE` inherits the brain,
-  graph, pruning, control and substeps from the file.
+  graph, pruning, control, substeps and readout width from the file — and its
+  step sizes (sigma, learning rate). A taught brain has none to hand on and is
+  carried on in small steps (0.01 and 0.0005). Measured from the shipped brain
+  on the real graph (eight candidates, two lives of up to 1500 ticks): at
+  sigma 0.1 the centre's fitness fell from 4245 to 1575 in one generation; at
+  0.01 with learning rate 0.01, to 1229; at 0.01 with 0.0005 it held (4245,
+  3666, 3448, 4597 over four generations, each on its own worlds). Whether
+  evolution then improves on the lesson is not measured: that takes many
+  generations.
 - `brains.evolved` grew `choose` (the seeded softmax draw) and `sparkline`,
   shared by both learned brains.
 - **What a brain file is tied to.** The graph's hash covers the connections
