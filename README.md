@@ -14,14 +14,15 @@ The first world is **Drosoville**.
 
 ## Status
 
-All five sub-projects: the simulation **engine**, the training **dojo**, the
+Six sub-projects so far: the simulation **engine**, the training **dojo**, the
 **live world** — a server, a wire protocol and a Python SDK, so several brains
 can live in one Drosoville at the same time — the **browser client**, a
 pixel-art view of the garden you can also play in, the **archive**: a world
 that survives its process, and lives that can be watched again as ghosts or
-exported as datasets, and the **first learned brain**: a tiny network evolved
-in the dojo, living in the garden with its neurons showing. See
-`docs/superpowers/specs/`.
+exported as datasets, the **first learned brain**: a tiny network evolved
+in the dojo, living in the garden with its neurons showing, and the
+**connectome fly**: a brain that runs on the wiring of the MaleCNS connectome,
+with a random-graph control beside it. See `docs/superpowers/specs/`.
 
 Where it is going: a **life and evolution simulator for small minds** — real
 fly wiring (MaleCNS), learned brains and humans in one world, every life
