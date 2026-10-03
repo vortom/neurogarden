@@ -224,9 +224,8 @@ def distil(
     rng = np.random.default_rng(config.seed)
     trainable = config.trainable()
     teacher = EvolvedBrain(path=config.teacher)  # refused here, not in a worker
-    genome = trainable.genome(trainable.initial(rng))
-    genome.w[:] = 0  # the first student knows nothing; round 1 is flown by the teacher anyway
-    result = Distilled(genome, config=config, teacher=dict(teacher.meta))
+    # The first student knows nothing: round 1 is flown by the teacher anyway.
+    result = Distilled(trainable.blank(), config=config, teacher=dict(teacher.meta))
     features: list[np.ndarray] = []
     targets: list[np.ndarray] = []
 

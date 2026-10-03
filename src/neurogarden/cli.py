@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import re
+import statistics
 import sys
 import time
 from collections import defaultdict
@@ -713,10 +714,10 @@ def cmd_distil(args) -> int:
         return _refuse(err)
 
     def report(entry) -> None:
-        lived = sorted(entry.lifespans)[len(entry.lifespans) // 2]
+        lived = statistics.median(entry.lifespans)
         print(
             f"round {entry.index + 1}/{config.rounds}: the {entry.flown_by} flew, median "
-            f"lifespan {lived} | {entry.ticks} moments, agreement {entry.agreement:.2f}, "
+            f"lifespan {lived:.0f} | {entry.ticks} moments, agreement {entry.agreement:.2f}, "
             f"divergence {entry.divergence:.3f}  ({entry.seconds:.1f}s)",
             flush=True,
         )

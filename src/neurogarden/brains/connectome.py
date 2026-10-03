@@ -304,16 +304,23 @@ class ConnectomeTrainable:
     def wiring(self) -> Wiring:
         return data.load(self.graph, self.min_synapses, self.control)
 
-    def initial(self, rng: np.random.Generator, scale: float = 1.0) -> np.ndarray:
-        """Every sense heard, the gain that carries a signal, a small random readout."""
+    def blank(self) -> ConnectomeGenome:
+        """Every sense heard, the gain that carries a signal, and a readout that says nothing
+        yet: where a brain that will be taught starts."""
         shape = ConnectomeGenome.zeros(self.pooled)
-        w = rng.standard_normal(shape.w.shape) * scale / np.sqrt(self.pooled)
         return ConnectomeGenome(
             gains=np.full(TINY_SIZE, self.input_gain, np.float32),
             log_gain=np.full(1, np.log(self.gain), np.float32),
-            w=w.astype(np.float32),
+            w=shape.w,
             b=shape.b,
-        ).to_vector()
+        )
+
+    def initial(self, rng: np.random.Generator, scale: float = 1.0) -> np.ndarray:
+        """The same with a small random readout: where a brain that will be bred starts."""
+        genome = self.blank()
+        w = rng.standard_normal(genome.w.shape) * scale / np.sqrt(self.pooled)
+        genome.w[:] = w.astype(np.float32)
+        return genome.to_vector()
 
     def genome(self, vector: np.ndarray) -> ConnectomeGenome:
         return ConnectomeGenome.zeros(self.pooled).with_vector(vector)
