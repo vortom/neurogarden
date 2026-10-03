@@ -14,7 +14,10 @@ live side by side under the same rules, are ranked by the same number, leave a
 complete record of every life, reproduce when they thrive, and evolve under
 pressures we choose. The record is also a dataset: every life, human or not,
 feeds reinforcement learning, imitation and evaluation, and strategies are
-compared across worlds.
+compared across worlds. The world server runs in the cloud as a **public
+garden**: anyone connects a fly — a MaleCNS brain on their own GPU, a learned
+brain, or themselves at the keyboard — and every life they live lands in the
+same archives, so the dataset grows with the community.
 
 Not a simulation of a real fly. The world is a tile garden, the body has seven
 actions, and a "MaleCNS fly" is real wiring with modelled senses, a learned
@@ -89,19 +92,28 @@ random control, or a small network) → *learned* readout → action. Only the
 encoding and readout learn, unless a plasticity rule is added inside the graph
 on purpose (section 5, last item).
 
+The split the public garden needs already exists: the **backend** is the world
+server (engine, runner, archive, WebSocket API; one process and one SQLite
+file per world; it also serves the static page); the **frontend** is a static
+bundle that speaks only the protocol and can live on any host; **clients** are
+the SDK, `join` and `flock` — the brains run where their owners run them,
+never on the server, which is why a world stays cheap however heavy the
+brains are.
+
 ## 4. Sub-projects
 
 | # | Name | Delivers | Needs the engine changed? |
 |---|---|---|---|
 | 6 | The connectome fly | `neurogarden connectome fetch` (MaleCNS v1.0 flat files, ~1.2 GB, cached outside the repo); `ConnectomeBrain` (LIF over the wiring; CPU/scipy backend for subgraphs, CUDA backend for the full graph); the random-graph control; `neurogarden flock --brain connectome --count N` (N flies, one batched update, each its own owner); neural telemetry table in the archive; evolved readout; balance guard | no |
 | 7 | World packs and the bench | worlds as map + config: scarce water, poisoned fruit (a resource kind with its own scent and a `damaged` consequence), predators (a hunting body, a new occupant class), seasons, bigger maps; per-world halls of flies; `neurogarden bench --brain … --world … --lives 20` (seeded, median lifespan and stats per cell, JSON/CSV); `evolve --map a --map b` for generalists; held-out worlds | yes, additive: new resource kind, body, events; `RULES_VERSION` bump; senses keep their shapes |
-| 8 | Learning from the record | `export --format jsonl|npz|parquet`; `MimicBrain` (behaviour cloning from archived human lives, numpy); PPO on readouts and small brains in the dojo (optional extra, torch); comparison in the bench | no |
-| 9 | Breeding | server-side reproduction: a fly that thrives for N days spawns a child beside it with the parent's brain file mutated by a seeded RNG, archived as an input; population cap and food as carrying capacity; lineage trees from the archive | no |
-| 10 | Bodies that evolve | a few per-agent body genes (metabolism rates, scent ranges, move cost, vision radius within the fixed window) inherited and mutated; eggs as world objects with a hatch time and an energy cost; predators eat eggs | yes: per-agent body parameters, `lay`, eggs; `RULES_VERSION` bump; golden replay regenerated |
-| 11 | Watching evolution | genomes per life in the archive; trait histograms over time; species by brain distance; a phylogeny and population view in the browser; `bench` over generations | no |
+| 8 | The public garden | the deferred cloud step: a Docker image of the server; TLS behind a reverse proxy, the page on the same host; accounts and per-owner tokens with invite links; persistent volume, backups from the archive's own snapshots; rate limits and `say` moderation; a public Drosoville (frozen rules) first, worlds per group later with a lobby; dataset releases (archive dumps + `export` bundles, CC-BY, with a consent line for human play: *your lives are recorded and published*) | no |
+| 9 | Learning from the record | `export --format jsonl|npz|parquet`; `MimicBrain` (behaviour cloning from archived human lives, numpy); PPO on readouts and small brains in the dojo (optional extra, torch); comparison in the bench | no |
+| 10 | Breeding | server-side reproduction: a fly that thrives for N days spawns a child beside it with the parent's brain file mutated by a seeded RNG, archived as an input; population cap and food as carrying capacity; lineage trees from the archive | no |
+| 11 | Bodies that evolve | a few per-agent body genes (metabolism rates, scent ranges, move cost, vision radius within the fixed window) inherited and mutated; eggs as world objects with a hatch time and an energy cost; predators eat eggs | yes: per-agent body parameters, `lay`, eggs; `RULES_VERSION` bump; golden replay regenerated |
+| 12 | Watching evolution | genomes per life in the archive; trait histograms over time; species by brain distance; a phylogeny and population view in the browser; `bench` over generations | no |
 | — | Plasticity inside the wiring (research) | dopamine-gated synapse changes in the mushroom body: poisoned fruit → learned aversion; lesions and ablations as experiments | no (brain-side) |
 
-Deferred as before: cloud deployment, auth, lobby, many worlds per process.
+Still deferred: many worlds per process, a marketplace of brains, anything that needs the engine to know who is a human.
 
 ## 5. The data we keep, and what it is for
 
@@ -120,6 +132,11 @@ Deferred as before: cloud deployment, auth, lobby, many worlds per process.
 The engine never stores a reward. Reward, fitness and score stay on the
 learner's side, as the architecture spec decided.
 
+Two rules keep the dataset worth having: every record carries its
+`RULES_VERSION` and world identity (it does), and the public Drosoville's rules
+are frozen — experiments live in other worlds. Human lives are published only
+under a consent line shown before the first hatch.
+
 ## 6. Hardware
 
 Everything but the full-graph connectome runs on a laptop CPU (the engine
@@ -133,12 +150,17 @@ the same brain file gives the same behaviour on both, up to float rounding.
 WSL2 is the recommended host on Windows (same environment as development, the
 one-writer archive lock works, CUDA works inside it).
 
-## 7. Open decisions
+## 7. Decisions taken
 
-- Reproduction in the engine (eggs, SP10) or only server-side (SP9)? Both,
-  in that order: SP9 needs no engine change and gives live evolution first.
-- Which MaleCNS cell types carry each sense in, and which descending neurons
-  read actions out: decided in the SP6 spike, from the annotation files,
-  before any training.
-- Mutation rates, population caps, regrowth: tuned by experiment; runs that
-  end in extinction are results.
+- Reproduction server-side first (SP10), eggs in the engine after (SP11): the
+  first needs no engine change and gives live evolution sooner.
+- Which MaleCNS cell types carry each sense in and which descending neurons
+  read actions out is settled in the SP6 spike from the annotation files,
+  before any training, and recorded in the SP6 spec.
+- Mutation rates, population caps, regrowth are tuned by experiment; a run
+  that ends in extinction is a result.
+- The public garden ships small and early (one VM, per-owner tokens, TLS,
+  backups, dumps) rather than complete and late: the dataset starts growing
+  the day the first friend connects a fly.
+- Cloud deployment was deferred by the owner on 2026-09-28 and placed as SP8
+  on 2026-10-03, after there is something worth connecting to and comparing.
