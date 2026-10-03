@@ -15,14 +15,24 @@ from pathlib import Path
 
 import numpy as np
 
-from neurogarden.brains import BRAINS, EvolvedBrain, Genome
+from neurogarden.brains import BRAINS, WEIGHTED, ConnectomeGenome, Genome
+from neurogarden.connectome import data as connectome_data
+from neurogarden.connectome.data import VARIANTS
+from neurogarden.dojo.evolve import BRAINS as BREEDABLE
 from neurogarden.dojo.evolve import EvolveConfig, evolve
 from neurogarden.dojo.render_ansi import AgentGlimpse, View, render_view
 from neurogarden.dojo.stats import FITNESSES
 from neurogarden.engine import RULES_VERSION
 from neurogarden.engine.clock import day_number
 from neurogarden.protocol import ProtocolError, build_catalog, schema_text
-from neurogarden.sdk import DEFAULT_URL, AsyncClient, ConnectionLost, ServerError, run_brain
+from neurogarden.sdk import (
+    DEFAULT_URL,
+    AsyncClient,
+    ConnectionLost,
+    ServerError,
+    run_brain,
+    run_flock,
+)
 from neurogarden.server import Archive, ServerConfig, history, parse_npc, serve
 from neurogarden.server import frames as server_frames
 from neurogarden.server.archive import MEMORY, ArchiveError, Life
@@ -105,7 +115,43 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("schema", help="print the protocol JSON Schema")
 
-    evolve_cmd = commands.add_parser("evolve", help="evolve a tiny brain in the dojo")
+    flock_cmd = commands.add_parser(
+        "flock", help="connect several brains at once, each its own owner"
+    )
+    flock_cmd.add_argument("--brain", choices=sorted(BRAINS), default=None)
+    flock_cmd.add_argument("--count", type=int, default=5, help="how many flies")
+    flock_cmd.add_argument(
+        "--owner-prefix", default=None, help="owners are PREFIX-1 … PREFIX-N (default: the brain)"
+    )
+    flock_cmd.add_argument("--seed", type=int, default=0)
+    flock_cmd.add_argument("--lives", type=int, default=None, help="lives per fly, then stop")
+    flock_cmd.add_argument(
+        "--weights", default=None, metavar="FILE.npz", help="the brains' own weights"
+    )
+    _add_connection_args(flock_cmd)
+
+    connectome_cmd = commands.add_parser(
+        "connectome", help="the MaleCNS wiring: fetch the files, build a graph, see what is cached"
+    )
+    connectome_cmd.add_argument("action", choices=("fetch", "build", "info"))
+    connectome_cmd.add_argument("--graph", choices=VARIANTS, default="central")
+    connectome_cmd.add_argument(
+        "--min-synapses", type=int, default=connectome_data.DEFAULT_MIN_SYNAPSES
+    )
+
+    evolve_cmd = commands.add_parser("evolve", help="evolve a brain in the dojo")
+    evolve_cmd.add_argument(
+        "--brain", choices=BREEDABLE, default=None, help="what to breed (default evolved)"
+    )
+    evolve_cmd.add_argument(
+        "--graph", choices=VARIANTS, default=None, help="connectome: which graph"
+    )
+    evolve_cmd.add_argument("--min-synapses", type=int, default=None, help="connectome only")
+    evolve_cmd.add_argument(
+        "--control", type=int, default=None, metavar="SEED",
+        help="connectome: breed on the row-shuffled graph (the control)",
+    )  # fmt: skip
+    evolve_cmd.add_argument("--substeps", type=int, default=None, help="connectome only")
     evolve_cmd.add_argument("--out", required=True, metavar="FILE.npz", help="where the weights go")
     evolve_cmd.add_argument("--generations", type=int, default=EvolveConfig.generations)
     evolve_cmd.add_argument("--population", type=int, default=EvolveConfig.population)
@@ -202,13 +248,24 @@ def cmd_serve(args) -> int:
     return 0
 
 
-def _make_brain(args):
-    kind = args.brain or ("evolved" if args.weights is not None else "scripted")
-    if args.weights is not None:
-        if kind != "evolved":
-            raise ValueError("--weights is for --brain evolved")
-        return EvolvedBrain(seed=args.seed, path=args.weights)
-    return BRAINS[kind](seed=args.seed)
+def _weights_kind(path: str) -> str:
+    """Which brain a weights file belongs to, from its own meta."""
+    try:
+        with np.load(path) as file:
+            meta = json.loads(str(file["meta"])) if "meta" in file else {}
+    except (ValueError, TypeError, KeyError):
+        return "evolved"  # not readable as weights: the evolved loader says why
+    return meta.get("brain", "evolved") if isinstance(meta, dict) else "evolved"
+
+
+def _make_brain(args, seed: int | None = None):
+    seed = args.seed if seed is None else seed
+    if args.weights is None:
+        return BRAINS[args.brain or "scripted"](seed=seed)
+    kind = args.brain or _weights_kind(args.weights)
+    if kind not in WEIGHTED:
+        raise ValueError("--weights is for --brain evolved or connectome")
+    return WEIGHTED[kind](seed=seed, path=args.weights)
 
 
 def cmd_join(args) -> int:
@@ -482,10 +539,20 @@ def cmd_evolve(args) -> int:
     try:
         start = parent = None
         if args.start is not None:
-            start, parent = Genome.load(args.start)
+            loader = ConnectomeGenome if _weights_kind(args.start) == "connectome" else Genome
+            start, parent = loader.load(args.start)
         # Carrying on from weights keeps their shape and settings unless told otherwise.
         inherited = parent or {}
+
+        def setting(given, key):
+            return given if given is not None else inherited.get(key, getattr(EvolveConfig, key))
+
         config = EvolveConfig(
+            brain=args.brain or inherited.get("brain") or EvolveConfig.brain,
+            graph=args.graph or inherited.get("graph") or EvolveConfig.graph,
+            min_synapses=setting(args.min_synapses, "min_synapses"),
+            control=args.control if args.control is not None else inherited.get("control"),
+            substeps=setting(args.substeps, "substeps"),
             generations=args.generations,
             population=args.population,
             sigma=args.sigma,
@@ -510,6 +577,15 @@ def cmd_evolve(args) -> int:
         out_dir = Path(args.out).resolve().parent
         if not out_dir.is_dir():  # found out now, not after the last generation
             raise ValueError(f"cannot write to {out_dir}: no such directory")
+        if config.brain == "connectome":
+            wiring = config.trainable().wiring()  # refused here if the graph is not cached
+            control = "" if config.control is None else f", random control {config.control}"
+            what = (
+                f"a connectome brain on the {wiring.variant} graph ({wiring.n} neurons, "
+                f"{wiring.connections} connections{control})"
+            )
+        else:
+            what = f"a {config.hidden}-neuron brain"
     except (ValueError, OSError) as err:
         return _refuse(err)
 
@@ -522,7 +598,7 @@ def cmd_evolve(args) -> int:
         )
 
     print(
-        f"evolving a {config.hidden}-neuron brain: {config.generations} generations of "
+        f"evolving {what}: {config.generations} generations of "
         f"{config.population}, {config.episodes} lives each up to {config.max_steps} ticks, "
         f"fitness {config.fitness}, temperature {config.temperature}"
     )
@@ -538,8 +614,75 @@ def cmd_evolve(args) -> int:
     return 0
 
 
+def cmd_flock(args) -> int:
+    if args.count < 1:
+        return _refuse(ValueError("--count must be at least 1"))
+    try:
+        kind = args.brain or (_weights_kind(args.weights) if args.weights else "connectome")
+        args.brain = kind
+        prefix = args.owner_prefix or {"connectome": "cns", "connectome-random": "rnd"}.get(
+            kind, kind
+        )
+        brains = [_make_brain(args, seed=args.seed + index) for index in range(args.count)]
+        owners = [f"{prefix}-{index + 1}" for index in range(args.count)]
+
+        def report(life) -> None:
+            stats = life.stats
+            causes = ", ".join(stats.death_causes) or "unknown"
+            print(
+                f"{life.owner}'s {life.name} (#{life.lineage}) lived {stats.lifespan} ticks "
+                f"({stats.days} days) | {causes} | bites {stats.bites} drinks {stats.drinks}",
+                flush=True,
+            )
+
+        print(f"flying {args.count} {kind} flies as {owners[0]} … {owners[-1]}", flush=True)
+        run_flock(args.url, brains, owners, token=args.token, lives=args.lives, on_life=report)
+    except (*_REFUSALS, OSError) as err:
+        return _refuse(err)
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+def cmd_connectome(args) -> int:
+    try:
+        if args.action == "fetch":
+            shown: dict[str, int] = {}
+
+            def progress(name: str, done: int, total: int | None) -> None:
+                tenth = done * 10 // total if total else done >> 27  # every 10%, or 128 MB
+                if shown.get(name) != tenth:
+                    shown[name] = tenth
+                    of = f" of {total / 1e6:.0f} MB" if total else ""
+                    print(f"{name}: {done / 1e6:.0f} MB{of}", flush=True)
+
+            for path in connectome_data.fetch(on_progress=progress):
+                print(f"have {path}")
+        elif args.action == "build":
+            wiring = connectome_data.build(args.graph, args.min_synapses, on_progress=print)
+            print(f"built {wiring.variant} (>= {wiring.min_synapses} synapses): {wiring.digest}")
+        else:
+            report = connectome_data.info()
+            print(f"cache: {report['cache']}")
+            for key, size in report["sources"].items():
+                print(f"  {key:<13} {'missing' if size is None else f'{size / 1e6:.0f} MB'}")
+            for graph in report["graphs"]:
+                print(
+                    f"  graph {graph['graph']} (>= {graph['min_synapses']} synapses): "
+                    f"{graph['neurons']} neurons, {graph['connections']} connections, "
+                    f"{graph['digest']}"
+                )
+            if not report["graphs"]:
+                print("  no graph built yet: `neurogarden connectome build`")
+    except (ValueError, OSError) as err:
+        return _refuse(err)
+    return 0
+
+
 COMMANDS = {
     "evolve": cmd_evolve,
+    "flock": cmd_flock,
+    "connectome": cmd_connectome,
     "serve": cmd_serve,
     "join": cmd_join,
     "watch": cmd_watch,

@@ -121,7 +121,7 @@ def test_run_episode_returns_stats_and_is_reproducible():
 
 
 def test_registry_lists_every_brain():
-    assert set(BRAINS) == {"random", "scripted", "evolved"}
+    assert set(BRAINS) == {"random", "scripted", "evolved", "connectome", "connectome-random"}
 
 
 def test_brain_seed_decorrelates_from_the_world_seed():

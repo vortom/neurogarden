@@ -474,7 +474,8 @@ def test_a_spectator_watches_an_archived_life_again_as_a_ghost():
     died, seen = run(scenario())
     kinds = [m["type"] for m in seen]
     start = kinds.index("replay")  # the live world and its log arrive first, as for anyone
-    assert set(kinds[:start]) <= {"world", "chronicle"} and kinds[start - 1] == "world"
+    # (a live frame may slip in before the server reads the request on a busy machine)
+    assert set(kinds[:start]) <= {"world", "chronicle", "frame"} and kinds[start - 1] == "world"
     assert set(kinds[start:]) == {"replay", "frame", "chronicle"}  # the lines of those days
     assert kinds[-1] == "replay"
     told = [m["payload"]["text"] for m in seen[start:] if m["type"] == "chronicle"]

@@ -1,0 +1,451 @@
+"""The connectome fly on a synthetic wiring: nothing here downloads or needs the real graph."""
+
+import asyncio
+import json
+
+import numpy as np
+import pytest
+
+from neurogarden import cli
+from neurogarden.brains import BRAINS, ConnectomeBrain, ConnectomeGenome, Genome
+from neurogarden.brains.connectome import ConnectomeFlock, ConnectomeTrainable
+from neurogarden.connectome import data
+from neurogarden.connectome.model import (
+    POOLED,
+    Encoding,
+    Projection,
+    RateNetwork,
+    make_network,
+)
+from neurogarden.dojo.evolve import EvolveConfig, evolve
+from neurogarden.dojo.features import TINY_SIZE
+from neurogarden.engine import Config
+from neurogarden.sdk import fly_flock
+from neurogarden.server import Server, ServerConfig
+from test_brains import observation
+
+# A small brain with every class the encoding asks for: (class, superclass, how many).
+POPULATIONS = (
+    ("olfactory", "cb_sensory", 40),
+    ("hygrosensory", "cb_sensory", 15),
+    ("thermosensory", "cb_sensory", 5),
+    ("chemosensory", "cb_sensory", 5),
+    ("mechanosensory", "cb_sensory", 10),
+    ("gustatory", "cb_sensory", 10),
+    ("mechanosensory_proprioceptive", "cb_sensory", 6),
+    ("DAN", "cb_intrinsic", 10),
+    ("none", "cb_endocrine", 5),
+    ("none", "visual_projection", 20),
+    ("none", "descending_neuron", 80),
+    ("none", "cb_intrinsic", 150),
+    ("none", "ol_intrinsic", 44),  # not part of the central brain
+)
+
+
+def tables(seed=0, connections=6000):
+    rng = np.random.default_rng(seed)
+    klass = np.concatenate([np.full(count, name) for name, _, count in POPULATIONS])
+    superclass = np.concatenate([np.full(count, name) for _, name, count in POPULATIONS])
+    n = len(klass)
+    ids = np.arange(1000, 1000 + 3 * n, 3)  # body ids: ascending, not 0..n
+    sign = np.where(rng.random(n) < 0.7, 1.0, -1.0).astype(np.float32)
+    pre = ids[rng.integers(0, n, connections)]
+    post = ids[rng.integers(0, n, connections)]
+    synapses = rng.integers(1, 12, connections)
+    return ids, superclass, klass, sign, pre, post, synapses
+
+
+def tiny_wiring(variant="full", min_synapses=1, seed=0):
+    return data.assemble(*tables(seed), variant=variant, min_synapses=min_synapses)
+
+
+@pytest.fixture
+def cache(tmp_path, monkeypatch):
+    """An empty connectome cache of our own, with the synthetic `full` graph built in it."""
+    monkeypatch.setenv("NEUROGARDEN_CACHE", str(tmp_path))
+    data.forget()
+    data.save(tiny_wiring())
+    yield data.cache_dir()
+    data.forget()
+
+
+# --- the graph -----------------------------------------------------------------------------
+
+
+def test_assemble_keeps_strong_connections_signs_them_and_normalises_rows():
+    ids, superclass, klass, sign, pre, post, synapses = tables()
+    wiring = data.assemble(ids, superclass, klass, sign, pre, post, synapses, "full", 5)
+    assert wiring.n == len(ids) and wiring.variant == "full" and wiring.min_synapses == 5
+    dense = wiring.matrix.toarray()
+    strong = synapses >= 5
+    row = np.searchsorted(ids, post[strong])
+    col = np.searchsorted(ids, pre[strong])
+    assert (dense != 0).sum() == len(set(zip(row.tolist(), col.tolist(), strict=True)))
+    assert np.all(np.sign(dense[row, col]) == sign[col])  # the sender's transmitter decides
+    totals = np.abs(dense).sum(axis=1)
+    assert np.allclose(totals[totals > 0], 1.0, atol=1e-5)  # every neuron's inputs sum to one
+    assert wiring.digest == data.assemble(*tables(), "full", 5).digest
+    assert wiring.digest != tiny_wiring(seed=1).digest
+
+
+def test_the_central_graph_leaves_the_optic_lobes_out():
+    central = tiny_wiring("central")
+    assert central.n == tiny_wiring().n - 44 and "ol_intrinsic" not in set(central.superclass)
+    assert len(central.where(superclass=("descending_neuron",))) == 80
+    assert len(central.where(klass=("olfactory",), superclass=("cb_endocrine",))) == 45
+    with pytest.raises(ValueError, match="unknown graph"):
+        data.assemble(*tables(), variant="thorax")
+
+
+def test_the_control_shuffles_who_receives_what_and_nothing_else():
+    wiring = tiny_wiring()
+    control = wiring.randomised(3)
+    assert control.connections == wiring.connections and control.control == 3
+    assert control.digest != wiring.digest and control.digest == wiring.randomised(3).digest
+    assert control.digest != wiring.randomised(4).digest
+    assert np.array_equal(np.sort(control.matrix.data), np.sort(wiring.matrix.data))
+    rows = lambda w: np.sort(np.asarray(abs(w.matrix).sum(axis=1)).ravel())  # noqa: E731
+    assert np.allclose(rows(control), rows(wiring))
+    assert control.describe()["control"] == 3 and wiring.describe()["control"] is None
+
+
+def test_build_reads_the_published_tables_and_caches_the_graph(tmp_path, monkeypatch):
+    import pyarrow as pa
+    import pyarrow.feather as feather
+
+    monkeypatch.setenv("NEUROGARDEN_CACHE", str(tmp_path))
+    data.forget()
+    cache = data.cache_dir()
+    with pytest.raises(ValueError, match="connectome fetch"):
+        data.build("full", 1)
+    ids, superclass, klass, sign, pre, post, synapses = tables()
+    orphan = np.array([7, 8])  # bodies that are not traced neurons, and pairs that touch them
+    annotations = pa.table(
+        {
+            "bodyId": np.concatenate([ids[::-1], orphan]),  # not sorted in the file
+            "status": ["Traced"] * len(ids) + ["Orphan", None],
+            "superclass": [*superclass[::-1], None, None],
+            "class": [None if k == "none" else k for k in klass[::-1]] + [None, None],
+        }
+    )
+    nt = np.where(sign > 0, "acetylcholine", "gaba")
+    transmitters = pa.table(
+        {"body": np.concatenate([ids, orphan]), "consensus_nt": [*nt, "dopamine", None]}
+    )
+    weights = pa.table(
+        {
+            "body_pre": np.concatenate([pre, [7, ids[0]]]),
+            "body_post": np.concatenate([post, [ids[1], 8]]),
+            "weight": np.concatenate([synapses, [50, 50]]),
+        }
+    )
+    cache.mkdir(parents=True)
+    feather.write_feather(annotations, cache / data.FILES["annotations"])
+    feather.write_feather(transmitters, cache / data.FILES["transmitters"])
+    feather.write_feather(weights, cache / data.FILES["weights"], chunksize=1000)
+
+    said = []
+    built = data.build("full", 1, on_progress=said.append)
+    assert built.digest == tiny_wiring().digest  # the same graph as from the tables directly
+    assert any("traced neurons" in line for line in said)
+    data.forget()
+    assert data.load("full", 1).digest == built.digest
+    assert data.load("full", 1) is data.load("full", 1)  # one copy per process
+    assert data.load("full", 1, control=2).digest == built.randomised(2).digest
+    report = data.info()
+    assert report["graphs"][0]["neurons"] == built.n and report["sources"]["weights"] > 0
+    with pytest.raises(ValueError, match="connectome build"):
+        data.load("central", 5)
+    data.forget()
+
+
+# --- dynamics, senses, readout ------------------------------------------------------------------
+
+
+def test_the_rate_step_is_the_equation_it_says_it_is():
+    wiring = tiny_wiring()
+    network = RateNetwork(wiring, substeps=2, leak=0.5)
+    rng = np.random.default_rng(0)
+    rate = rng.random(wiring.n, dtype=np.float32)
+    current = rng.random(wiring.n, dtype=np.float32)
+    dense = wiring.matrix.toarray()
+    expected = rate
+    for _ in range(2):
+        expected = 0.5 * expected + 0.5 * np.tanh(3.0 * (dense @ expected) + current)
+    assert np.allclose(network.step(rate, current, 3.0), expected, atol=1e-5)
+    assert not network.step(network.zeros(), network.zeros(), 3.0).any()  # silence stays silent
+    # two flies stepped together are the two flies stepped apart
+    rates = np.stack([rate, rate[::-1]], axis=1)
+    currents = np.stack([current, current[::-1]], axis=1)
+    together = network.step(rates, currents, np.array([3.0, 1.0], np.float32))
+    assert np.allclose(together[:, 0], expected, atol=1e-5)
+    assert np.allclose(together[:, 1], network.step(rate[::-1], current[::-1], 1.0), atol=1e-5)
+    with pytest.raises(ValueError):
+        RateNetwork(wiring, substeps=0)
+    with pytest.raises(ValueError, match="unknown backend"):
+        make_network(wiring, backend="abacus")
+
+
+def test_the_torch_backend_agrees_with_numpy():
+    pytest.importorskip("torch")
+    wiring = tiny_wiring()
+    rng = np.random.default_rng(1)
+    rate = rng.random((wiring.n, 3), dtype=np.float32)
+    current = rng.random((wiring.n, 3), dtype=np.float32)
+    gain = np.array([1.0, 2.0, 4.0], np.float32)
+    numpy_step = make_network(wiring).step(rate, current, gain)
+    torch_step = make_network(wiring, backend="torch", device="cpu").step(rate, current, gain)
+    assert np.allclose(numpy_step, torch_step, atol=1e-4)
+
+
+def test_every_feature_drives_its_own_seeded_group_of_neurons():
+    wiring = tiny_wiring()
+    encoding = Encoding.for_wiring(wiring, seed=0)
+    assert len(encoding.groups) == TINY_SIZE and all(len(group) > 0 for group in encoding.groups)
+    everyone = np.concatenate(encoding.groups)
+    assert len(set(everyone.tolist())) == len(everyone)  # no neuron hears two features
+    assert set(wiring.klass[encoding.groups[0]]) == {"olfactory"}  # fruit smell, own tile
+    assert set(wiring.klass[encoding.groups[5]]) == {"hygrosensory"}
+    assert set(wiring.klass[encoding.groups[16]]) == {"gustatory"}
+    assert set(wiring.superclass[encoding.groups[24]]) == {"visual_projection"}
+    again = Encoding.for_wiring(wiring, seed=0)
+    other = Encoding.for_wiring(wiring, seed=1)
+    assert all(np.array_equal(a, b) for a, b in zip(encoding.groups, again.groups, strict=True))
+    assert any(not np.array_equal(a, b) for a, b in zip(encoding.groups, other.groups, strict=True))
+    features = np.arange(TINY_SIZE, dtype=np.float32)
+    current = encoding.current(features, np.full(TINY_SIZE, 2.0, np.float32), wiring.n)
+    assert np.all(current[encoding.groups[7]] == 14.0) and current.sum() == pytest.approx(
+        sum(2.0 * index * len(group) for index, group in enumerate(encoding.groups))
+    )
+    bare = data.assemble(*tables(), variant="full", min_synapses=1)
+    bare.klass[:] = "none"
+    bare.superclass[:] = "cb_intrinsic"
+    with pytest.raises(ValueError, match="too few neurons"):
+        Encoding.for_wiring(bare)
+
+
+def test_the_descending_neurons_are_pooled_into_balanced_signed_buckets():
+    wiring = tiny_wiring()
+    projection = Projection.for_wiring(wiring, seed=0)
+    assert len(projection.descending) == 80
+    counts = np.bincount(projection.bucket, minlength=POOLED)
+    assert counts.min() >= 1 and counts.max() - counts.min() <= 1
+    rate = np.random.default_rng(2).random(wiring.n, dtype=np.float32)
+    pooled = projection.pool(rate)
+    assert pooled.shape == (POOLED,)
+    both = projection.pool(np.stack([rate, 2 * rate], axis=1))
+    assert np.allclose(both[:, 0], pooled, atol=1e-6) and np.allclose(both[:, 1], 2 * pooled)
+    few = data.assemble(*tables(), variant="full", min_synapses=1)
+    few.superclass[few.superclass == "descending_neuron"] = "cb_intrinsic"
+    with pytest.raises(ValueError, match="descending neurons"):
+        Projection.for_wiring(few)
+
+
+# --- the brain -----------------------------------------------------------------------------------
+
+
+def trainable(**options):
+    return ConnectomeTrainable(graph="full", min_synapses=1, temperature=0.5, **options)
+
+
+def seeded_brain(cache, seed=0):
+    spec = trainable()
+    return spec.brain(spec.initial(np.random.default_rng(seed)))
+
+
+def test_a_genome_round_trips_and_is_not_mistaken_for_another_brains(tmp_path, cache):
+    spec = trainable()
+    vector = spec.initial(np.random.default_rng(0))
+    genome = spec.genome(vector)
+    assert genome.size == spec.size == 481 and np.array_equal(genome.to_vector(), vector)
+    assert genome.gain == pytest.approx(3.0) and np.all(genome.gains == 1.0)
+    with pytest.raises(ValueError, match="expected 481"):
+        genome.with_vector(np.zeros(3, np.float32))
+    path = genome.save(tmp_path / "cns", spec.describe())
+    assert path.name == "cns.npz"
+    loaded, meta = ConnectomeGenome.load(path)
+    assert np.array_equal(loaded.to_vector(), vector)
+    assert meta["brain"] == "connectome" and meta["digest"] == data.load("full", 1).digest
+    assert (meta["graph"], meta["min_synapses"], meta["substeps"]) == ("full", 1, 3)
+    small = Genome.zeros(4).save(tmp_path / "mlp.npz")
+    with pytest.raises(ValueError, match="not a connectome brain"):
+        ConnectomeGenome.load(small)
+    with pytest.raises(ValueError, match="not an evolved brain"):
+        Genome.load(path)
+    assert (
+        cli._weights_kind(str(path)) == "connectome" and cli._weights_kind(str(small)) == "evolved"
+    )
+
+
+def test_the_brain_is_reproducible_remembers_within_a_life_and_forgets_at_birth(cache):
+    seen = [observation(body=(700 - 10 * step, 700, 800, 1000, step)) for step in range(12)]
+    first, second = seeded_brain(cache), seeded_brain(cache)
+    first.reset(5)
+    second.reset(5)
+    lived = [first.act(o) for o in seen]
+    assert lived == [second.act(o) for o in seen] and all(0 <= a < 7 for a in lived)
+    assert first.rate.any()  # the network carries state from tick to tick
+    thought = first.thought()
+    assert len(thought) == 16 and set(thought) <= set("▁▂▃▄▅▆▇█")
+    first.reset(5)
+    assert not first.rate.any() and [first.act(o) for o in seen] == lived
+    with pytest.raises(ValueError, match="needs the wiring"):
+        ConnectomeBrain(genome=first.genome)
+
+
+def test_weights_find_their_graph_in_the_cache_and_refuse_another(tmp_path, cache):
+    spec = trainable()
+    path = spec.genome(spec.initial(np.random.default_rng(0))).save(
+        tmp_path / "cns.npz", {**spec.describe(), "temperature": 0.5}
+    )
+    brain = ConnectomeBrain(seed=1, path=path)
+    assert brain.wiring is data.load("full", 1) and brain.temperature == 0.5
+    assert brain.network.substeps == 3 and 0 <= brain.act(observation()) < 7
+    control = trainable(control=7)
+    control_path = control.genome(control.initial(np.random.default_rng(0))).save(
+        tmp_path / "rnd.npz", control.describe()
+    )
+    assert ConnectomeBrain(path=control_path).wiring.control == 7  # the file names its control
+    data.forget()
+    data.save(tiny_wiring(seed=9))  # somebody rebuilt the graph from other data
+    with pytest.raises(ValueError, match="bred on graph"):
+        ConnectomeBrain(path=path)
+
+
+def test_a_flock_thinks_in_one_multiply_what_each_would_think_alone(cache):
+    seen = [observation(body=(600, 650 - 20 * step, 800, 1000, step)) for step in range(6)]
+    alone = [seeded_brain(cache, seed) for seed in (0, 1, 2)]
+    grouped = [seeded_brain(cache, seed) for seed in (0, 1, 2)]
+    for index, brain in enumerate([*alone, *grouped]):
+        brain.reset(index % 3)
+    flock = ConnectomeFlock(grouped)
+    for step, what in enumerate(seen):
+        sees = [what, None if step == 2 else what, what]  # the second fly misses a tick
+        expected = [
+            None if o is None else brain.act(o) for brain, o in zip(alone, sees, strict=True)
+        ]
+        assert flock.act(sees) == expected
+    assert np.allclose(grouped[1].rate, alone[1].rate, atol=1e-5)
+    assert flock.act([None, None, None]) == [None, None, None]
+    with pytest.raises(ValueError, match="share one wiring"):
+        ConnectomeFlock([grouped[0], trainable(substeps=2).brain(grouped[0].genome.to_vector())])
+    with pytest.raises(ValueError, match="at least one"):
+        ConnectomeFlock([])
+
+
+# --- breeding it -----------------------------------------------------------------------------
+
+
+CONNECTOME = dict(
+    brain="connectome", graph="full", min_synapses=1, generations=2, population=4,
+    episodes=1, max_steps=30, workers=1,
+)  # fmt: skip
+
+
+def test_evolution_breeds_the_parts_around_the_wiring(tmp_path, cache):
+    first = evolve(EvolveConfig(**CONNECTOME))
+    second = evolve(EvolveConfig(**CONNECTOME))
+    assert isinstance(first.genome, ConnectomeGenome) and len(first.history) == 2
+    assert np.array_equal(first.genome.to_vector(), second.genome.to_vector())
+    meta = first.meta
+    assert (meta["brain"], meta["graph"], meta["control"]) == ("connectome", "full", None)
+    assert meta["digest"] == data.load("full", 1).digest and meta["temperature"] == 0.5
+    path = first.genome.save(tmp_path / "bred.npz", meta)
+    assert ConnectomeBrain(path=path).temperature == 0.5
+    on_control = evolve(EvolveConfig(**{**CONNECTOME, "control": 3}))
+    assert on_control.meta["control"] == 3 and on_control.meta["digest"] != meta["digest"]
+    resumed = evolve(EvolveConfig(**CONNECTOME), start=first.genome, parent=meta)
+    assert resumed.meta["total_generations"] == 4
+    with pytest.raises(ValueError, match="not a connectome brain"):
+        evolve(EvolveConfig(**CONNECTOME), start=Genome.zeros(4))
+    with pytest.raises(ValueError, match="unknown brain"):
+        EvolveConfig(brain="oracle")
+    with pytest.raises(ValueError, match="graph must be"):
+        EvolveConfig(graph="thorax")
+
+
+# --- flying many -------------------------------------------------------------------------------
+
+
+FAST = dict(port=0, tps=50.0, npcs=[], hello_timeout=0.5)
+SHORT = Config(initial_satiety=6, initial_health=5)
+
+
+def test_a_flock_joins_as_many_owners_and_reports_every_life(cache):
+    async def scenario():
+        async with Server(ServerConfig(**FAST, config=SHORT)) as server:
+            brains = [seeded_brain(cache, seed) for seed in range(3)]
+            owners = ["cns-1", "cns-2", "cns-3"]
+            told = []
+            lives = await fly_flock(server.url, brains, owners, lives=2, on_life=told.append)
+            scores = {state.owner: state.lineage for state in server.runner.roster.scores()}
+            return lives, told, scores
+
+    lives, told, scores = asyncio.run(scenario())
+    assert len(lives) == 6 and lives == told
+    assert scores == {"cns-1": 2, "cns-2": 2, "cns-3": 2}
+    assert {life.owner for life in lives} == {"cns-1", "cns-2", "cns-3"}
+    assert all(life.stats.lifespan > 0 and life.name for life in lives)
+
+
+def test_a_flock_of_ordinary_brains_and_its_refusals():
+    async def scenario():
+        async with Server(ServerConfig(**FAST, config=SHORT)) as server:
+            brains = [BRAINS["random"](seed=1), BRAINS["scripted"](seed=2)]
+            lives = await fly_flock(server.url, brains, ["a", "b"], lives=1)
+            with pytest.raises(ValueError, match="its own owner"):
+                await fly_flock(server.url, brains, ["a", "a"])
+            with pytest.raises(ValueError, match="as many owners"):
+                await fly_flock(server.url, brains, ["a"])
+            return lives
+
+    assert sorted(life.owner for life in asyncio.run(scenario())) == ["a", "b"]
+
+
+# --- the commands --------------------------------------------------------------------------------
+
+
+def test_connectome_info_and_refusals_without_a_graph(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEUROGARDEN_CACHE", str(tmp_path / "empty"))
+    data.forget()
+    assert cli.main(["connectome", "info"]) == 0
+    out = capsys.readouterr().out
+    assert out.count("missing") == 3 and "no graph built yet" in out
+    assert cli.main(["connectome", "build"]) == 1
+    assert "connectome fetch" in capsys.readouterr().err
+    argv = ["evolve", "--brain", "connectome", "--out", str(tmp_path / "x.npz"), "--workers", "1"]
+    assert cli.main(argv) == 1
+    assert "connectome build" in capsys.readouterr().err
+    assert cli.main(["flock", "--count", "0"]) == 1
+    assert "at least 1" in capsys.readouterr().err
+
+
+def test_evolve_and_flock_commands_on_a_cached_graph(tmp_path, cache, capsys):
+    out = str(tmp_path / "cns.npz")
+    argv = [
+        "evolve", "--brain", "connectome", "--graph", "full", "--min-synapses", "1", "--out", out,
+        "--generations", "1", "--population", "2", "--episodes", "1", "--max-steps", "20",
+        "--workers", "1",
+    ]  # fmt: skip
+    assert cli.main(argv) == 0
+    printed = capsys.readouterr().out
+    assert "evolving a connectome brain on the full graph (400 neurons" in printed
+    again = str(tmp_path / "again.npz")
+    resume = ["evolve", "--start", out, "--out", again, "--generations", "1", "--population", "2"]
+    assert cli.main([*resume, "--episodes", "1", "--max-steps", "20", "--workers", "1"]) == 0
+    assert "connectome brain on the full graph" in capsys.readouterr().out  # inherited
+    with np.load(again) as file:
+        meta = json.loads(str(file["meta"]))
+    assert meta["total_generations"] == 2 and meta["parent"]["brain"] == "connectome"
+    assert cli.main(["connectome", "info"]) == 0
+    assert "graph full (>= 1 synapses): 400 neurons" in capsys.readouterr().out
+
+    async def scenario():
+        async with Server(ServerConfig(**FAST, config=SHORT)) as server:
+            argv = ["flock", "--weights", out, "--count", "2", "--lives", "1", "--url", server.url]
+            return await asyncio.to_thread(cli.main, argv)
+
+    assert asyncio.run(scenario()) == 0
+    printed = capsys.readouterr().out
+    assert "flying 2 connectome flies as cns-1 … cns-2" in printed
+    assert "cns-1's" in printed and "cns-2's" in printed
