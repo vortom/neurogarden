@@ -26,8 +26,9 @@ in the dojo, living in the garden with its neurons showing. See
 Where it is going: a **life and evolution simulator for small minds** — real
 fly wiring (MaleCNS), learned brains and humans in one world, every life
 recorded, reproduction and heritable bodies, selection pressures as world
-packs, and the record used to train and compare strategies. The plan, the
-prior art and the honesty rules are in
+packs, the record used to train and compare strategies, and a public garden
+in the cloud anyone can connect a fly to. The plan, the prior art and the
+honesty rules are in
 `docs/superpowers/specs/2026-10-03-evolution-simulator-roadmap.md`.
 
 ## Quick start: a live garden
