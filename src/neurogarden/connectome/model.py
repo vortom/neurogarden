@@ -19,6 +19,10 @@ DEFAULT_SUBSTEPS = 3  # updates per world tick: a smell reaches the descending n
 DEFAULT_LEAK = 0.5
 POOLED = 64  # features the descending neurons are pooled into for the readout
 GROUP_MAX = 128  # neurons one feature drives at most, so no sense shouts over the others
+# What the learned numbers lean on besides the graph: which neurons each feature drives, how
+# the descending neurons are pooled, the update rule. Change any of them and weights bred
+# before mean something else — bump this, and old files are refused instead of misread.
+MODEL_VERSION = 1
 
 _EXTRA = "the connectome brain needs scipy: install neurogarden[connectome]"
 
@@ -45,7 +49,7 @@ class Wiring:
 
     def __post_init__(self) -> None:
         if not self.digest:
-            self.digest = digest_of(self.matrix)
+            self.digest = digest_of(self.matrix, self.superclass, self.klass)
 
     @property
     def n(self) -> int:
@@ -64,9 +68,10 @@ class Wiring:
         """The control: every neuron receives another neuron's inputs (rows permuted).
 
         Same neurons, same number of connections, same weights and signs, same balance of
-        input per neuron — but the pathways from senses to descending neurons are gone.
+        input per neuron — but who listens to whom is chance: the senses still reach the
+        descending neurons, by pathways no fly ever had.
         """
-        order = np.random.default_rng(seed).permutation(self.n)
+        order = _shuffled(np.arange(self.n), SplitMix64(seed))  # ours: the same on any numpy
         return Wiring(
             matrix=self.matrix[order].tocsr(),
             superclass=self.superclass,
@@ -88,11 +93,21 @@ class Wiring:
         }
 
 
-def digest_of(matrix) -> str:
-    """A short content hash of the graph: a brain refuses to think with another one."""
+def digest_of(matrix, superclass: np.ndarray, klass: np.ndarray) -> str:
+    """A short content hash of the graph and of what each neuron is: a brain refuses to think
+    with another one. The labels count because they decide which neurons a sense drives and
+    which are read out; the arrays are hashed in fixed types, so the hash does not depend on
+    how scipy chose to store them."""
+    matrix = matrix.tocsr()
+    if not matrix.has_sorted_indices:
+        matrix = matrix.sorted_indices()
     sha = hashlib.sha256()
-    for part in (matrix.indptr, matrix.indices, matrix.data):
-        sha.update(np.ascontiguousarray(part).tobytes())
+    sha.update(np.asarray(matrix.shape, "<i8").tobytes())
+    for part, kind in ((matrix.indptr, "<i8"), (matrix.indices, "<i8"), (matrix.data, "<f4")):
+        sha.update(np.ascontiguousarray(part, dtype=kind).tobytes())
+    for labels in (superclass, klass):
+        sha.update("\x00".join(str(label) for label in labels).encode())
+        sha.update(b"\x01")
     return sha.hexdigest()[:16]
 
 

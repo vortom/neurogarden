@@ -1,6 +1,6 @@
 """The connectome brain: real wiring, modelled dynamics, a learned way in and out.
 
-The 25 tiny features drive fixed groups of sensory neurons, a leaky rate network runs on
+The 25 tiny features drive fixed groups of neurons (mostly sensory), a leaky rate network runs on
 the MaleCNS wiring for a few updates per tick, and a learned readout turns the pooled
 activity of the descending neurons into one of seven actions. What evolution finds is 481
 numbers — input gains, the network's gain, the readout; the wiring is never trained. The
@@ -11,6 +11,7 @@ simulated fly.
 from __future__ import annotations
 
 import json
+import zipfile
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -21,6 +22,7 @@ from neurogarden.connectome import data
 from neurogarden.connectome.model import (
     DEFAULT_LEAK,
     DEFAULT_SUBSTEPS,
+    MODEL_VERSION,
     POOLED,
     Encoding,
     Projection,
@@ -122,12 +124,17 @@ class ConnectomeGenome:
             else:
                 with np.load(source) as file:
                     genome, meta = cls._unpack(file)
-        except (KeyError, ValueError, TypeError, OSError) as err:
+        except (KeyError, ValueError, TypeError, OSError, zipfile.BadZipFile) as err:
             if isinstance(err, FileNotFoundError):
                 raise
             raise ValueError(f"{name}: not a connectome brain's weights ({err})") from None
         if meta.get("features_version", FEATURES_VERSION) != FEATURES_VERSION:
             raise ValueError(f"{name}: features_version {meta['features_version']} is not ours")
+        if meta.get("model_version", MODEL_VERSION) != MODEL_VERSION:
+            raise ValueError(
+                f"{name}: bred for connectome model {meta['model_version']}, this is "
+                f"{MODEL_VERSION} (the senses or the readout changed since)"
+            )
         return genome, meta
 
     @classmethod
@@ -328,15 +335,24 @@ class ConnectomeTrainable:
             projection_seed=self.projection_seed,
         )
 
-    def check_start(self, start) -> None:
+    def check_start(self, start, parent: dict | None = None) -> None:
+        """`parent` is the start's meta: weights bred on one wiring are not carried on to
+        another, where the same numbers would drive and read other pathways."""
         if not isinstance(start, ConnectomeGenome):
             raise ValueError("the start is not a connectome brain's weights")
+        bred_on = (parent or {}).get("digest")
+        if bred_on is not None and bred_on != self.wiring().digest:
+            raise ValueError(
+                f"the start was bred on graph {bred_on}, this run's is {self.wiring().digest} "
+                "(another graph, pruning or control): weights do not carry over between wirings"
+            )
 
     def describe(self) -> dict:
         """What the file records so the brain finds its graph again."""
         return {
             "brain": self.kind,
             **self.wiring().describe(),
+            "model_version": MODEL_VERSION,
             "substeps": self.substeps,
             "leak": self.leak,
             "encoding_seed": self.encoding_seed,

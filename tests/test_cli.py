@@ -289,6 +289,9 @@ def test_verify_checks_the_whole_history(garden, capsys):
 def test_serve_resumes_an_archive_and_refuses_another_seed(garden, capsys, monkeypatch):
     path, ticks = garden
     seen = []
+    archive = cli._open_archive(path)
+    lives = len(archive.lives())  # alice's, and as many as the npc got through meanwhile
+    archive.close()
 
     def announce(server):
         cli.banner(server)
@@ -305,7 +308,7 @@ def test_serve_resumes_an_archive_and_refuses_another_seed(garden, capsys, monke
     out, err = capsys.readouterr()
     assert seen == [(True, ticks)]
     assert "drosoville (seed 3)" in out and f"resumed at tick {ticks}" in out
-    assert re.search(r"\d+ lives so far", out) and f"archive: {path}" in out
+    assert f"{lives} lives so far" in out and f"archive: {path}" in out
     assert "seed 3), not drosoville (seed 9)" in err
 
 
@@ -408,6 +411,8 @@ def test_evolve_writes_weights_that_join_can_fly(tmp_path, capsys):
     assert "hidden neurons" in capsys.readouterr().err
     assert cli.main(["evolve", "--out", out, "--population", "3", "--workers", "1"]) == 1
     assert "even" in capsys.readouterr().err
+    assert cli.main(["evolve", "--out", out, "--graph", "full", "--control", "1"]) == 1
+    assert "--graph, --control: only for --brain connectome" in capsys.readouterr().err
 
 
 def test_an_evolve_cut_short_keeps_its_last_finished_generation(tmp_path, capsys, monkeypatch):

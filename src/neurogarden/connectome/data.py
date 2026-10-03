@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
+import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -131,11 +132,11 @@ def build(
     on_progress: Callable[[str], None] | None = None,
 ) -> Wiring:
     """Build a graph from the fetched files and cache it. Takes a minute or two."""
+    feather = _require_pyarrow()  # first: without the extra, say how to get it
     import pyarrow as pa
     import pyarrow.compute as pc
     import pyarrow.ipc as ipc
 
-    feather = _require_pyarrow()
     cache = cache or cache_dir()
     say = on_progress or (lambda text: None)
     sources = {key: cache / name for key, name in FILES.items()}
@@ -186,14 +187,23 @@ def build(
 
 
 def save(wiring: Wiring, cache: Path | None = None) -> tuple[Path, Path]:
-    """Write a (non-control) graph into the cache under its variant's name."""
+    """Write a (non-control) graph into the cache under its variant's name.
+
+    Both files are written beside their names and then renamed, and the neuron table carries
+    the graph's hash: a build that was cut short leaves a pair `load` refuses, not a graph
+    with another graph's labels.
+    """
     sparse = require_scipy()
     cache = cache or cache_dir()
     cache.mkdir(parents=True, exist_ok=True)
     graph_path, neurons_path = graph_paths(wiring.variant, wiring.min_synapses, cache)
-    sparse.save_npz(graph_path, wiring.matrix, compressed=False)
+    graph_part = graph_path.with_name(graph_path.stem + ".part.npz")
+    neurons_part = neurons_path.with_name(neurons_path.stem + ".part.npz")
+    sparse.save_npz(graph_part, wiring.matrix, compressed=False)
     meta = {"dataset": DATASET, **wiring.describe()}
-    np.savez(neurons_path, superclass=wiring.superclass, klass=wiring.klass, meta=json.dumps(meta))
+    np.savez(neurons_part, superclass=wiring.superclass, klass=wiring.klass, meta=json.dumps(meta))
+    graph_part.replace(graph_path)
+    neurons_part.replace(neurons_path)
     return graph_path, neurons_path
 
 
@@ -218,15 +228,23 @@ def load(
                 f"no {variant} graph (>= {min_synapses} synapses) in {cache}: run "
                 "`neurogarden connectome fetch` and `neurogarden connectome build`"
             )
-        with np.load(neurons_path) as table:
-            superclass, klass = table["superclass"], table["klass"]
+        again = f"run `neurogarden connectome build` again (the {variant} graph in {cache})"
+        try:
+            with np.load(neurons_path) as table:
+                superclass, klass = table["superclass"], table["klass"]
+                stamped = json.loads(str(table["meta"])).get("digest")
+            matrix = sparse.load_npz(graph_path).tocsr()
+        except (OSError, ValueError, KeyError, zipfile.BadZipFile) as err:
+            raise ValueError(f"the cached graph cannot be read ({err}): {again}") from None
         wiring = Wiring(
-            matrix=sparse.load_npz(graph_path).tocsr(),
+            matrix=matrix,
             superclass=superclass,
             klass=klass,
             variant=variant,
             min_synapses=min_synapses,
         )
+        if stamped != wiring.digest:  # half a rebuild, or a cache from before the hash changed
+            raise ValueError(f"the cached graph and its neuron table do not match: {again}")
     _wirings[key] = wiring
     return wiring
 

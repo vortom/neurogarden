@@ -142,22 +142,25 @@ its own seeded generator, so a life is reproducible.
 
 ## The connectome fly
 
-A fly that thinks with real wiring. `ConnectomeBrain` runs a leaky rate network
-on the central brain of the MaleCNS connectome — 50,668 neurons and 2,425,802
+A brain built on real wiring. `ConnectomeBrain` runs a leaky rate network on
+the central brain of the MaleCNS connectome — 50,668 neurons and 2,425,802
 connections of at least five synapses, out of the 165,122 traced neurons and
 25,563,197 connections of the whole dataset (Janelia FlyEM, MaleCNS v1.0,
-CC-BY 4.0). Smell, touch, the body's needs and light drive fixed groups of
-sensory neurons; the activity of the 1,314 descending neurons, pooled, is read
-out into the seven actions.
+CC-BY 4.0). Smell, taste and touch drive fixed groups of sensory neurons, the
+body's needs drive dopamine and endocrine neurons, light drives visual
+projection neurons; the activity of the 1,314 descending neurons, pooled, is
+read out into the seven actions.
 
 What this is, and is not: the *connections* are real. The neuron equation, the
 signs given to transmitters, which neurons "smell fruit" and the readout are
-this project's modelling choices, and the readout (481 numbers in all) is
-learned by the same evolution that bred the small network — the wiring is never
-trained. It is a model inspired by real wiring, not a simulated fly. To keep
-that honest, every connectome brain ships with a **control**: the same brain
-bred the same way on a graph where each neuron receives another neuron's
-inputs (`connectome-random`). If the control lives as long, the wiring is not
+this project's modelling choices. What is learned — 25 input gains, one network
+gain and a 455-number readout, 481 numbers in all — is found by the same
+evolution that bred the small network; the wiring is never trained. It is a
+model inspired by real wiring, not a simulated fly. To keep that honest, every
+connectome brain ships with a **control**: the same brain bred the same way on
+a graph where each neuron receives another neuron's inputs
+(`connectome-random`) — the senses still reach the descending neurons there,
+by pathways no fly ever had. If the control lives as long, the wiring is not
 what is doing the work — the balance guard prints both.
 
 ```bash
@@ -175,7 +178,8 @@ wiring and are stepped together. Unlike the small network, this brain has a
 memory: its network state persists from tick to tick within a life. Its speech
 bubble shows sixteen of its pooled descending features.
 
-Breed your own readout (`--control SEED` breeds the control instead):
+Breed your own readout (`--control SEED` breeds the control instead). The
+weights are written after every generation, so a long run can be stopped:
 
 ```bash
 uv run neurogarden evolve --brain connectome --out mine.npz --generations 30 --max-steps 1500

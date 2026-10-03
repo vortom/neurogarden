@@ -154,19 +154,23 @@ class Server:
                 self.runner.request_join(port)
 
     async def __aenter__(self) -> Server:
-        self._hatch_npcs()
-        if self.config.web and not bundle_present():
-            log.warning(
-                "no browser client in %s: run `npm --prefix web run build` to serve the page",
-                STATIC_DIR,
+        try:
+            self._hatch_npcs()
+            if self.config.web and not bundle_present():
+                log.warning(
+                    "no browser client in %s: run `npm --prefix web run build` to serve the page",
+                    STATIC_DIR,
+                )
+            self._ws = await websockets_serve(
+                self.gateway.handle,
+                self.config.host,
+                self.config.port,
+                origins=allowed_origins(self.config.host, self.config.port),
+                process_request=make_process_request(self.config.web),
             )
-        self._ws = await websockets_serve(
-            self.gateway.handle,
-            self.config.host,
-            self.config.port,
-            origins=allowed_origins(self.config.host, self.config.port),
-            process_request=make_process_request(self.config.web),
-        )
+        except BaseException:  # a brain that cannot be built, a port that is taken:
+            self.archive.close()  # nobody will call __aexit__, so let go of the world here
+            raise
         self.port = self._ws.sockets[0].getsockname()[1]
         self._ticker = asyncio.get_running_loop().create_task(self.runner.run(self.stop))
         log.info(

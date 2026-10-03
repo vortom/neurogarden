@@ -10,6 +10,7 @@ in Drosoville is in the weights, and the weights came from lifespans.
 from __future__ import annotations
 
 import json
+import zipfile
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -92,7 +93,7 @@ class Genome:
             else:
                 with np.load(source) as data:
                     genome, meta = cls._unpack(data, name)
-        except (KeyError, ValueError, TypeError, OSError) as err:
+        except (KeyError, ValueError, TypeError, OSError, zipfile.BadZipFile) as err:
             if isinstance(err, FileNotFoundError):
                 raise
             raise ValueError(f"{name}: not an evolved brain's weights ({err})") from None
@@ -183,7 +184,7 @@ class MlpTrainable:
     def brain(self, vector: np.ndarray) -> EvolvedBrain:
         return EvolvedBrain(genome=self.genome(vector), temperature=self.temperature)
 
-    def check_start(self, start) -> None:
+    def check_start(self, start, parent: dict | None = None) -> None:
         if getattr(start, "hidden", None) != self.hidden:
             raise ValueError(
                 f"the start has {getattr(start, 'hidden', '?')} hidden neurons, "

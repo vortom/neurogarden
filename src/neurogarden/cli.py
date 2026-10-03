@@ -10,6 +10,7 @@ import json
 import logging
 import sys
 import time
+import zipfile
 from collections import defaultdict
 from pathlib import Path
 
@@ -253,7 +254,7 @@ def _weights_kind(path: str) -> str:
     try:
         with np.load(path) as file:
             meta = json.loads(str(file["meta"])) if "meta" in file else {}
-    except (ValueError, TypeError, KeyError):
+    except (ValueError, TypeError, KeyError, zipfile.BadZipFile):
         return "evolved"  # not readable as weights: the evolved loader says why
     return meta.get("brain", "evolved") if isinstance(meta, dict) else "evolved"
 
@@ -585,7 +586,18 @@ def cmd_evolve(args) -> int:
                 f"{wiring.connections} connections{control})"
             )
         else:
+            connectome_only = {
+                "--graph": args.graph,
+                "--min-synapses": args.min_synapses,
+                "--control": args.control,
+                "--substeps": args.substeps,
+            }
+            given = [flag for flag, value in connectome_only.items() if value is not None]
+            if given:  # said out loud, not silently dropped
+                raise ValueError(f"{', '.join(given)}: only for --brain connectome")
             what = f"a {config.hidden}-neuron brain"
+        if start is not None:  # refused now, not after the banner
+            config.trainable().check_start(start, parent)
     except (ValueError, OSError) as err:
         return _refuse(err)
 

@@ -182,4 +182,73 @@ when available; real GPU runs happen on the owner's machine), a spiking model.
 
 ## 9. What the implementation added (and where it deviates)
 
-Filled in at the end of the sub-project.
+**Deviations from the sections above**
+
+- **The control permutes rows** (§4 said "every connection's target shuffled").
+  `Wiring.randomised(seed)` gives every neuron another neuron's whole set of
+  inputs. Same neurons, connection count, weights, signs and — unlike a
+  per-connection shuffle — exactly the same balance of input per neuron, so the
+  row normalisation is untouched and the only thing lost is *which* neurons a
+  neuron listens to. The permutation comes from the project's own generator,
+  so the control is the same graph on any numpy. On the command line it is
+  `--control SEED`, not `--control random`; the shipped control uses seed 1.
+  The control is not a graph without pathways: from the 1,780 driven neurons
+  the real graph reaches 441, 1,292 and 1,312 of the 1,314 descending neurons
+  within one, two and three connections; control 1 reaches 282, 1,200 and
+  1,275. What it lacks is the fly's pathways, not pathways.
+- **Senses** (§4 table). "On nest" drives proprioceptive and unclassified
+  sensory neurons, not a second mechanosensory group; a group holds at most
+  128 neurons; a class the graph lacks falls back to a pool of other sensory
+  neurons instead of failing (a graph with no sensory neurons at all is
+  refused). On the central graph the groups are uneven, because the classes
+  are: 128 neurons per fruit-smell direction, 13 per humidity direction, 5 per
+  nest-smell direction, 128 for each touch, 82 per body need, 128 for light.
+  The learned input gains are what evens that out.
+- **Actions out.** The projection is not sparse: every descending neuron feeds
+  exactly one of the 64 buckets with a seeded sign, scaled by one over the
+  square root of the bucket's size. The pooled features are multiplied by a
+  fixed 10 before the readout, and the network gain is stored as its logarithm
+  and starts at 3 — both so that evolution's one step size suits all 481
+  numbers.
+- **Trainable** (§6). The interface is `size`, `initial(rng, scale)`,
+  `genome(vector)`, `brain(vector)`, `check_start(genome)` and `describe()`
+  (what goes into the file's meta), not `build(vector)`.
+- **Flock on a CPU** (§5). The flies of a flock are stepped together in one
+  multiply on either backend; it costs what stepping them in turn would (§2),
+  and keeps one code path.
+- **Not built: `flock --telemetry`** (§8). A connectome fly's activity is shown
+  as its thought bubble only. Recording it belongs with the other datasets in
+  sub-project 9.
+- **Torch backend: written, not run.** There is no torch wheel for this Mac
+  (x86-64, Python 3.14), so the test that compares it with numpy is skipped
+  here. It is unproven until it runs on the GPU machine.
+
+**Additions**
+
+- `neurogarden evolve` writes the weights after every generation (to a
+  `.part` file, then renamed), and says which generation the file holds when it
+  is stopped: a connectome run takes an hour and a crash used to leave nothing.
+- `--weights FILE` alone picks the brain: the file says whether it is a small
+  network or a connectome readout. `evolve --start FILE` inherits the brain,
+  graph, pruning, control and substeps from the file.
+- `brains.evolved` grew `choose` (the seeded softmax draw) and `sparkline`,
+  shared by both learned brains.
+- **What a brain file is tied to.** The graph's hash covers the connections
+  (in fixed number types, so it does not depend on how scipy stores them) and
+  every neuron's class and superclass, because the labels decide which neurons
+  a sense drives. The file also carries `model_version` (1): the encoding
+  table, the pooling and the update rule as code. Another hash or version is
+  refused on load — and by `evolve --start`, which will not carry weights from
+  one wiring onto another (the real graph onto its control, say).
+- **The cache is whole or refused.** The graph and its neuron table are
+  written beside their names and renamed; the table carries the hash, and
+  `load` refuses a pair that does not match (half a rebuild, a truncated file)
+  with the command that fixes it.
+- `evolve` refuses `--graph`, `--min-synapses`, `--control` and `--substeps`
+  for the small network instead of ignoring them. A server whose hosted brain
+  cannot be built (`serve --npc connectome:1` without a graph) releases its
+  archive instead of holding the lock.
+- The synthetic wiring in the tests has 400 neurons, not a few dozen: the
+  projection needs 64 descending neurons to pool.
+- Building the central graph from the cached files takes 78 s through the
+  package (85 s in the spike).

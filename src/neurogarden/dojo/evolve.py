@@ -224,7 +224,7 @@ def evolve(
     if start is None:  # all-zero weights would idle every fly to death: start somewhere
         theta = trainable.initial(rng, config.init_scale)
     else:
-        trainable.check_start(start)
+        trainable.check_start(start, parent)
         theta = start.to_vector()
     result = Evolved(trainable.genome(theta), config=config, parent=parent)
     half = config.population // 2

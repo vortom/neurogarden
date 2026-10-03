@@ -475,7 +475,7 @@ def test_a_spectator_watches_an_archived_life_again_as_a_ghost():
     kinds = [m["type"] for m in seen]
     start = kinds.index("replay")  # the live world and its log arrive first, as for anyone
     # (a live frame may slip in before the server reads the request on a busy machine)
-    assert set(kinds[:start]) <= {"world", "chronicle", "frame"} and kinds[start - 1] == "world"
+    assert set(kinds[:start]) <= {"world", "chronicle", "frame"} and "world" in kinds[:start]
     assert set(kinds[start:]) == {"replay", "frame", "chronicle"}  # the lines of those days
     assert kinds[-1] == "replay"
     told = [m["payload"]["text"] for m in seen[start:] if m["type"] == "chronicle"]
@@ -484,7 +484,7 @@ def test_a_spectator_watches_an_archived_life_again_as_a_ghost():
     assert (ghost["owner"], ghost["lineage"], ghost["done"]) == ("alice", 1, False)
     assert ghost["died_tick"] == died.tick and ghost["lifespan"] == died.stats.lifespan
     assert ghost["speed"] == 2 and ghost["causes"] == ["starvation"]
-    frames = [m["payload"] for m in seen if m["type"] == "frame"]
+    frames = [m["payload"] for m in seen[start:] if m["type"] == "frame"]  # the ghost's
     assert frames and frames[0]["tick"] == ghost["born_tick"] and frames[-1]["tick"] == died.tick
     first = next(a for a in frames[0]["agents"] if a["owner"] == "alice")
     assert first["name"] == died.name and first["connected"] and first["alive"]
