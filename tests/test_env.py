@@ -85,6 +85,9 @@ def test_a_life_can_begin_at_any_hour_of_the_day():
     _, _, _, truncated, info = [env.step(0) for _ in range(5)][-1]
     assert truncated and info["stats"].lifespan == 5 and info["tick"] == birth_tick(5, day) + 5
     assert NeuroGardenEnv().reset(seed=5)[1]["tick"] == 0  # dawn, unless asked otherwise
+    unseeded = NeuroGardenEnv(any_hour=True)
+    hours = {unseeded.reset()[1]["tick"] for _ in range(6)}  # no seed given: still an hour
+    assert all(0 <= hour < day for hour in hours) and len(hours) > 1  # of the day, and not one
 
 
 def test_death_terminates_and_time_limit_truncates():

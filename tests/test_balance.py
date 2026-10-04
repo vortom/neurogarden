@@ -59,13 +59,14 @@ def test_the_connectome_brain_is_reported_beside_its_control():
     """Real wiring against shuffled wiring, taught alike. The number is the point: it is
     printed, and only living longer than a random brain is asserted — whether the wiring helps
     is a result, not a requirement."""
+    pytest.importorskip("scipy")
     from neurogarden.brains import ConnectomeBrain, RandomGraphBrain
+    from neurogarden.connectome import data
 
-    try:
-        ConnectomeBrain()
-        RandomGraphBrain()
-    except (ValueError, OSError) as missing:
-        pytest.skip(f"needs the cached MaleCNS graph and the shipped weights: {missing}")
+    if not all(path.exists() for path in data.graph_paths("central", data.DEFAULT_MIN_SYNAPSES)):
+        pytest.skip("needs the cached MaleCNS graph: `neurogarden connectome build`")
+    ConnectomeBrain()  # with the graph here, weights that do not load are a failure, not a skip
+    RandomGraphBrain()
     env = NeuroGardenEnv(max_steps=3000, any_hour=True)  # born at any hour, as in a live garden
     seeds = range(10)
 
@@ -80,4 +81,4 @@ def test_the_connectome_brain_is_reported_beside_its_control():
     print(
         f"\nmedian lifespan: connectome {connectome}, shuffled control {control}, random {random}"
     )
-    assert connectome > random, "the bred connectome brain should outlive a random one"
+    assert connectome > random, "the taught connectome brain should outlive a random one"

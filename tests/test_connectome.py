@@ -10,7 +10,7 @@ import pytest
 from neurogarden import cli
 from neurogarden.brains import BRAINS, ConnectomeBrain, ConnectomeGenome, EvolvedBrain, Genome
 from neurogarden.brains.base import brain_seed
-from neurogarden.brains.connectome import ConnectomeFlock, ConnectomeTrainable
+from neurogarden.brains.connectome import GAIN_CEILING, ConnectomeFlock, ConnectomeTrainable
 from neurogarden.brains.evolved import default_weights, softmax, weights_kind
 from neurogarden.connectome import data
 from neurogarden.connectome.model import (
@@ -260,6 +260,27 @@ def test_the_rate_step_is_the_equation_it_says_it_is():
         make_network(wiring, backend="abacus")
 
 
+def test_below_the_gain_ceiling_the_network_forgets_how_it_began():
+    wiring = tiny_wiring()
+    network = RateNetwork(wiring)
+    rng = np.random.default_rng(1)
+    rested = network.zeros()
+    stirred = rng.uniform(-1, 1, wiring.n).astype(np.float32)  # the same life, begun elsewhere
+    apart = [float(np.abs(rested - stirred).max())]
+    for _ in range(60):
+        current = rng.random(wiring.n, dtype=np.float32)
+        rested = network.step(rested, current, GAIN_CEILING)
+        stirred = network.step(stirred, current, GAIN_CEILING)
+        apart.append(float(np.abs(rested - stirred).max()))
+    # Never further apart than the bound allows — (1 - leak) + leak * gain per update — and
+    # in the end not apart at all: the state is an echo of what was sensed.
+    shrink = (1 - network.leak + network.leak * GAIN_CEILING) ** network.substeps
+    assert GAIN_CEILING < 1 and shrink < 1
+    steps = zip(apart, apart[1:], strict=False)
+    assert all(after <= before * shrink + 1e-6 for before, after in steps)
+    assert apart[-1] < 1e-3 * apart[0]
+
+
 def test_the_torch_backend_agrees_with_numpy():
     pytest.importorskip("torch")
     wiring = tiny_wiring()
@@ -335,7 +356,24 @@ def test_a_genome_round_trips_and_is_not_mistaken_for_another_brains(tmp_path, c
     assert genome.gain == pytest.approx(0.5) and np.all(genome.gains == 1.0)
     loud = spec.genome(vector)
     loud.log_gain[:] = np.log(3.0)  # however it was bred, the network stays a contraction:
-    assert loud.gain == 1.0  # above 1 it would stop forgetting how a life began
+    assert loud.gain == GAIN_CEILING < 1  # from 1 up it may stop forgetting how a life began
+    held = spec.genome(vector)
+    held.log_gain[:] = np.log(GAIN_CEILING)
+    wiring, seen = data.load("full", 1), observation()
+    brains = [ConnectomeBrain(genome=g, wiring=wiring, temperature=0.5) for g in (loud, held)]
+    for brain in brains:  # and that is the gain the network is really stepped at,
+        brain.act(seen)
+    assert np.allclose(brains[0].rate, brains[1].rate, atol=1e-6) and brains[0].rate.any()
+    flock = [ConnectomeBrain(genome=g, wiring=wiring, temperature=0.5) for g in (loud, held)]
+    ConnectomeFlock(flock).act([seen, seen])  # alone or in a flock
+    assert np.allclose(flock[0].rate, brains[0].rate, atol=1e-6)
+    assert np.allclose(flock[1].rate, brains[1].rate, atol=1e-6)
+    broken = spec.genome(vector)
+    broken.log_gain[:] = np.nan  # a number that is no number is refused, not flown
+    with pytest.raises(ValueError, match="not all finite"):
+        ConnectomeBrain(genome=broken, wiring=wiring)
+    with pytest.raises(ValueError, match="not all finite"):
+        ConnectomeGenome.load(broken.save(tmp_path / "broken.npz", spec.describe()))
     with pytest.raises(ValueError, match="expected 481"):
         genome.with_vector(np.zeros(3, np.float32))
     path = genome.save(tmp_path / "cns", spec.describe())
@@ -492,8 +530,14 @@ def test_fitting_a_readout_finds_the_linear_teacher_behind_the_answers():
         features * units, answers, l2=1e-4
     )
     w, b, agreement, divergence, _ = fit_readout(features, answers, l2=1e-4)
-    assert same_agreement == agreement and same_divergence == pytest.approx(divergence, rel=1e-3)
+    assert same_agreement == pytest.approx(agreement, abs=0.002)
+    assert same_divergence == pytest.approx(divergence, rel=1e-3)
     assert np.allclose((features * units) @ scaled_w + scaled_b, features @ w + b, atol=1e-3)
+    # A feature that never moves — or moves only in its last digits — gets no weight at all.
+    still = np.full((len(features), 1), 0.7) + rng.normal(0, 1e-9, (len(features), 1))
+    padded_w, padded_b, *_ = fit_readout(np.hstack([features, still]), answers, l2=1e-4)
+    assert not padded_w[6].any()
+    assert np.allclose(features @ padded_w[:6] + padded_b, features @ w + b, atol=1e-6)
     sure = np.eye(7)[answers.argmax(axis=1)]  # a teacher that never doubts, and never rests:
     sure[:, 6] = 0  # the bias of the action it never takes stays finite
     sure[sure.sum(axis=1) == 0, 0] = 1
@@ -618,8 +662,10 @@ def test_the_shipped_brain_and_its_control_were_taught_alike():
     assert how["control"] is None and how_control["control"] == 1
     assert how["digest"] != how_control["digest"]
     same = ("brain", "graph", "min_synapses", "neurons", "connections", "model_version", "pooled")
-    same += ("substeps", "leak", "encoding_seed", "projection_seed", "temperature")
+    same += ("substeps", "leak", "encoding_seed", "projection_seed", "temperature", "any_hour")
     assert {key: how[key] for key in same} == {key: how_control[key] for key in same}
+    assert how["any_hour"] is True  # both taught on lives that begin at any hour,
+    assert real.gain == control.gain == how["distilled"]["gain"] == 0.5 < GAIN_CEILING  # as echoes
     lesson, lesson_control = how["distilled"], how_control["distilled"]
     alike = ("rounds", "lives", "max_steps", "seed", "l2", "map", "gain", "input_gain")
     alike += ("rounds_done", "teacher", "teacher_digest")
@@ -757,8 +803,11 @@ def test_evolve_and_flock_commands_on_a_cached_graph(tmp_path, cache, capsys):
     further = [*carry_on[:2], bred, *carry_on[3:]]  # and what was bred from it keeps them
     assert cli.main(further) == 0
     assert "sigma 0.01, learning rate 0.0005" in capsys.readouterr().out
-    assert cli.main([*carry_on, "--sigma", "0.2", "--no-any-hour"]) == 0  # unless told otherwise
-    assert "sigma 0.2, learning rate 0.0005, born at dawn" in capsys.readouterr().out
+    assert cli.main([*carry_on, "--sigma", "0.02", "--no-any-hour"]) == 0  # unless told otherwise:
+    # a sigma of its own takes the learning rate with it, in the same ratio to its square
+    assert "sigma 0.02, learning rate 0.002, born at dawn" in capsys.readouterr().out
+    assert cli.main([*carry_on, "--sigma", "0.02", "--learning-rate", "0.3"]) == 0
+    assert "sigma 0.02, learning rate 0.3, born at any hour" in capsys.readouterr().out
     assert cli.main([*lesson, "--teacher", out]) == 1  # a connectome brain is no teacher
     assert "not an evolved brain" in capsys.readouterr().err
     shuffled = str(tmp_path / "mine.npz")  # the control, bred under a name of its own

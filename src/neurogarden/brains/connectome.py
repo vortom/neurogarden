@@ -36,14 +36,16 @@ from .evolved import choose, default_weights, read_weights, sparkline, weights_m
 
 DEFAULT_WEIGHTS = "connectome-v1.npz"
 CONTROL_WEIGHTS = "connectome-random-v1.npz"
-# The network gain stays at or below 1. There every update is a contraction (each neuron's
-# inputs sum to at most 1 and tanh never stretches), so the network forgets how a life began
-# within a few ticks and its state is an echo of what the fly senses. Above 1 it keeps
-# activity of its own: two copies hearing the same life from different beginnings never meet
-# (measured at 1.2 and up), and a readout taught in one such regime is lost in another — a
-# fly born at another hour, or one whose flock was restarted. Below 1 nothing is lost on the
-# way either: the senses are read back from the pooled features better at 0.5 than at 3.
-GAIN_CEILING = 1.0
+# The network gain stays below 1. There every update is a contraction: each neuron's inputs
+# sum to at most 1 and tanh never stretches, so two states move together by a factor of at
+# most (1 - leak) + leak * gain per update, the network forgets how a life began within a few
+# ticks, and its state is an echo of what the fly senses. At exactly 1 that factor is 1 and
+# nothing is promised; at 1.2 and above (measured) the real wiring keeps activity of its own:
+# two copies hearing the same life from different beginnings never meet, and a readout taught
+# in one such regime is lost in another — a fly born at another hour, or one whose flock was
+# restarted. Nothing is lost by staying below either: fitted alike, the pooled features give
+# the senses back better at gain 0.5 than at 3 (the spec has both rows).
+GAIN_CEILING = 0.95
 INITIAL_GAIN = 0.5  # the network gain a new brain starts with
 READOUT_GAIN = 500.0  # an echo is faint: this brings the pooled features to about 1
 THOUGHT_NEURONS = 16
@@ -141,6 +143,8 @@ class ConnectomeGenome:
         meta = weights_meta(file)
         names = ("gains", "log_gain", "w", "b")
         genome = cls(*(np.asarray(file[part], dtype=np.float32) for part in names))
+        if not all(np.isfinite(part).all() for part in genome.parts()):
+            raise ValueError("the weights are not all finite numbers")
         pooled = genome.w.shape[0] if genome.w.ndim == 2 else -1
         for part, shape in zip(genome.parts(), cls.zeros(max(pooled, 1)).parts(), strict=True):
             if part.shape != shape.shape:
@@ -176,6 +180,8 @@ class ConnectomeBrain:
             if wiring is None:
                 raise ValueError("a genome needs the wiring it was bred on")
             self.genome, self.meta = genome, {}
+            if not all(np.isfinite(part).all() for part in genome.parts()):
+                raise ValueError("these weights are not all finite numbers")
         else:
             source = path if path is not None else default_weights(self.weights)
             self.genome, self.meta = ConnectomeGenome.load(source)

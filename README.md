@@ -171,13 +171,13 @@ never both, and lives no longer than the random one. The small network needed
 
 Two things the build had to measure its way into (the spec has the numbers):
 
-- **The network is kept a contraction** — its gain is held at 1 or below, so
-  its state is an echo of what the fly senses, and two copies that began
-  differently agree again within a few ticks. Above a gain of about 1.2 the
-  real wiring keeps activity of its own and never forgets how a life began; a
-  brain taught that way lived 3000 ticks in the dojo and 750 in a live garden.
-  The shuffled control forgets at any gain: that much is the wiring's own
-  doing.
+- **The network is kept a contraction** — its gain is held below 1, so its
+  state is an echo of what the fly senses, and two copies that began
+  differently agree again within a few ticks. From a gain of 1.2, the first
+  tried above 1, the real wiring keeps activity of its own and does not forget
+  how a life began; a brain taught at gain 3 lived a median 2751 ticks in the
+  dojo and about 750 in a live garden. The shuffled control forgot at every
+  gain tried, up to 3: that much looks like the wiring's own doing.
 - **Lives are taught and measured born at any hour of the day**, as flies in a
   live garden are. The dojo used to hatch every fly at dawn.
 
@@ -234,7 +234,7 @@ lesson wears away within a generation. Whether evolution then improves on the
 lesson is not measured yet.
 
 ```bash
-uv run neurogarden distil --out mine.npz --rounds 8 --lives 8   # the shipped lesson (--seed 1): ten minutes
+uv run neurogarden distil --out mine.npz --rounds 8 --lives 8 --seed 1   # the shipped lesson: ten minutes
 uv run neurogarden evolve --start mine.npz --out bred.npz --generations 10 --max-steps 1500
 uv run neurogarden flock --weights mine.npz --count 5       # owners mine-1 … mine-5
 ```

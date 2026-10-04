@@ -53,7 +53,7 @@ class DistilConfig:
     lives: int = 4  # lives flown per round
     max_steps: int = 2400
     seed: int = 0
-    l2: float = 1e-4  # keeps the readout small where the features say nothing
+    l2: float = 1e-4  # holds the readout's weights, each in units of its feature's spread
     workers: int | None = None  # processes flying the lives; 0 or 1 = in this process
     map: str = "drosoville"
     temperature: float = 0.5  # the student's: it draws from the softmax of its scores at this
@@ -82,8 +82,8 @@ class DistilConfig:
             )
         if self.gain > GAIN_CEILING:
             raise ValueError(
-                f"gain must be at most {GAIN_CEILING}: above it the network keeps activity of "
-                "its own and stops forgetting how a life began"
+                f"gain must be at most {GAIN_CEILING}: from 1 up the network may keep activity "
+                "of its own and stops forgetting how a life began"
             )
         if self.workers is not None and self.workers < 0:
             raise ValueError("workers must be None (all cores), 0 or 1 (in-process), or more")
@@ -215,8 +215,11 @@ def fit_readout(
 
     raw = np.asarray(features, np.float64)
     centre, spread = raw.mean(axis=0), raw.std(axis=0)
-    spread = np.where(spread > 1e-12, spread, 1.0)  # a feature that never moves says nothing
-    x = (raw - centre) / spread
+    # A feature that does not move says nothing — and one that moves only in its last digits
+    # is rounding, which standardising would blow up into a weight no float32 could carry.
+    still = spread <= 1e-6 * np.maximum(1.0, np.abs(centre))
+    spread = np.where(still, 1.0, spread)
+    x = np.where(still, 0.0, (raw - centre) / spread)
     p = np.asarray(targets, np.float64)
     ticks, width = x.shape
     actions = p.shape[1]

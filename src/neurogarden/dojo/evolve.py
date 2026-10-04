@@ -38,9 +38,14 @@ BRAINS = ("evolved", "connectome")  # what can be bred
 # perturbation of the taught readout does as well as the readout, and the lesson wears away
 # (measured on the real graph: the centre's fitness went from 3517 to about 2750 in a
 # generation; with these it held). The learning rate goes with the square of sigma, so a step
-# stays about a third of a perturbation.
+# stays about a third of a perturbation: `fine_learning_rate` keeps that ratio for another
+# sigma.
 FINE_SIGMA = 0.01
 FINE_LEARNING_RATE = 0.0005
+
+
+def fine_learning_rate(sigma: float) -> float:
+    return FINE_LEARNING_RATE * (sigma / FINE_SIGMA) ** 2
 
 
 @dataclass(frozen=True)

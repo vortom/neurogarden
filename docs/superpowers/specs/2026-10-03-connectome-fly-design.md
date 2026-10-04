@@ -207,17 +207,19 @@ their pooled features still are after 100 ticks, relative to their size):
 | real wiring | 0.000 | 0.000 | 0.000 | 0.001 | 0.083 | 0.159 | 1.093 | 1.723 |
 | control 1 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | not run | 0.000 |
 
-On the real wiring the network keeps activity of its own from a gain of about
-1.2, and what a readout sees then depends on how the life began: a readout
-taught in one such regime is lost in another. The shuffled control forgets at
-every gain tried. That is a property of the fly's wiring, and the one clear
-difference between the two graphs this sub-project found.
+On the real wiring the network keeps activity of its own from a gain of 1.2,
+the first tried above 1, and what a readout sees then depends on how the life
+began: a readout taught in one such regime is lost in another. The shuffled
+control forgot at every gain tried. On this evidence — one held-out life, one
+random beginning, one control seed — that is a property of the fly's wiring,
+and the clearest difference between the two graphs this sub-project found.
 
-At a gain of 1 or below the update is a contraction: each neuron's inputs sum
-to at most 1 in magnitude and tanh never stretches a difference, so two states
-move together by a factor of at most (1 − leak) + leak·gain per update. Hence:
+Below a gain of 1 the update is a contraction: each neuron's inputs sum to at
+most 1 in magnitude and tanh never stretches a difference, so two states move
+together by a factor of at most (1 − leak) + leak·gain per update. At exactly
+1 that factor is 1 and nothing is promised (the table's 0.001). Hence:
 
-- `GAIN_CEILING = 1.0`: the genome's gain is held there whatever number
+- `GAIN_CEILING = 0.95`: the genome's gain is held there whatever number
   evolution reaches. A new brain starts at 0.5 (0.5 and 0.8 were each taught
   for five rounds of four lives; 0.5 flew to the cap in more of the probe's
   lives). At 0.5 a difference shrinks to 0.75³ = 0.42 of itself per world
@@ -266,6 +268,7 @@ The dojo's default, and the small network's evolution, are unchanged (dawn).
   | | fruit smell | humidity | nest smell | touch | body | light |
   |---|---|---|---|---|---|---|
   | real wiring, pooled | 0.88 | 0.95 | 0.87 | 0.93 | 0.61 | 1.00 |
+  | real wiring, pooled, at gain 3 | 0.75 | 0.79 | 0.01 | 0.66 | 0.35 | 0.99 |
   | control 1, pooled | 0.98 | 0.97 | 0.96 | 0.89 | 0.98 | 1.00 |
   | real wiring, all descending | 0.96 | 0.98 | 0.96 | 1.00 | 0.99 | 1.00 |
   | control 1, all descending | 0.99 | 0.99 | 0.98 | 1.00 | 0.99 | 1.00 |
@@ -309,7 +312,7 @@ The dojo's default, and the small network's evolution, are unchanged (dawn).
   evolved brain was bred alone, and what it teaches is to live alone.
 - *What may and may not be said.* The fly's wiring is not shown to help a
   brain live, nor to hurt. The control learns the lesson more closely. What
-  the wiring does differently is hold activity of its own above gain 1.2 and
+  the wiring does differently is hold activity of its own from gain 1.2 and
   pass the body's needs less cleanly through this pooling. One lesson per
   graph is one sample; a comparison worth the name needs many lessons, many
   more lives, and company — the `bench` of sub-project 7.
@@ -341,7 +344,7 @@ The dojo's default, and the small network's evolution, are unchanged (dawn).
   square root of the bucket's size (64 is the default; the width is a property
   of the brain file, `--pooled`). The pooled features are multiplied by a
   fixed 500 before the readout, and the network gain is stored as its
-  logarithm, starts at 0.5 and is held at 1 or below (see above).
+  logarithm, starts at 0.5 and is held below 1, at 0.95 at most (see above).
 - **Trainable** (§6). The interface is `size`, `initial(rng, scale)`,
   `genome(vector)`, `brain(vector)`, `check_start(genome)` and `describe()`
   (what goes into the file's meta), not `build(vector)`.
@@ -365,7 +368,9 @@ The dojo's default, and the small network's evolution, are unchanged (dawn).
   graph, pruning, control, substeps and readout width from the file — and its
   step sizes (sigma, learning rate) and whether lives begin at any hour. A
   taught brain has no step sizes to hand on and is carried on in small steps
-  (0.01 and 0.0005). Measured from the shipped brain on the real graph (eight
+  (0.01 and 0.0005; a `--sigma` of its own takes the learning rate with it,
+  in the same ratio to its square). Measured from the shipped brain on the
+  real graph (eight
   candidates, two lives of up to 1500 ticks, the same worlds in the first
   generation): at sigma 0.1 and learning rate 0.05 no candidate beat the
   centre (best 3518 against 3517, mean 2757) and the centre fell to about 2750

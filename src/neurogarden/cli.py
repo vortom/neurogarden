@@ -24,7 +24,13 @@ from neurogarden.connectome.data import VARIANTS
 from neurogarden.connectome.model import POOLED
 from neurogarden.dojo.distil import DistilConfig, distil
 from neurogarden.dojo.evolve import BRAINS as BREEDABLE
-from neurogarden.dojo.evolve import FINE_LEARNING_RATE, FINE_SIGMA, EvolveConfig, evolve
+from neurogarden.dojo.evolve import (
+    FINE_LEARNING_RATE,
+    FINE_SIGMA,
+    EvolveConfig,
+    evolve,
+    fine_learning_rate,
+)
 from neurogarden.dojo.render_ansi import AgentGlimpse, View, render_view
 from neurogarden.dojo.stats import FITNESSES
 from neurogarden.engine import RULES_VERSION
@@ -173,7 +179,7 @@ def build_parser() -> argparse.ArgumentParser:
     evolve_cmd.add_argument(
         "--learning-rate", type=float, default=None,
         help=f"default {EvolveConfig.learning_rate}; carrying on: the start's; from a taught "
-        f"brain {FINE_LEARNING_RATE}",
+        f"brain {FINE_LEARNING_RATE}, or in that ratio to the square of --sigma",
     )  # fmt: skip
     evolve_cmd.add_argument(
         "--hidden", type=int, default=None, help=f"neurons (default {EvolveConfig.hidden})"
@@ -630,7 +636,10 @@ def cmd_evolve(args) -> int:
         # A taught brain has never been bred, so it has no step sizes to hand on: small ones,
         # or the first generation undoes the lesson.
         taught = bool(inherited.get("distilled")) and "sigma" not in inherited
-        steps = {"sigma": FINE_SIGMA, "learning_rate": FINE_LEARNING_RATE} if taught else {}
+        steps = {}
+        if taught:  # the learning rate goes with the sigma it is given, in the same ratio
+            sigma = args.sigma if args.sigma is not None else FINE_SIGMA
+            steps = {"sigma": sigma, "learning_rate": fine_learning_rate(sigma)}
 
         def step(given, key):
             return given if given is not None else steps.get(key, setting(None, key))
