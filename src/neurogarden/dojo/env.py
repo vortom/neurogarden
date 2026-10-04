@@ -45,8 +45,7 @@ class NeuroGardenEnv(gymnasium.Env):
         """`any_hour=False`: every life begins at world tick 0, at dawn. `any_hour=True`: the
         world first runs empty until `birth_tick(seed)`, so the fly is born at some hour of
         the first day — as in a live garden, where a fly hatches whenever its owner joins. A
-        brain that only ever met dawn births has age and daylight locked together in
-        everything it learned, and may be lost when they come apart."""
+        brain should be taught and measured on the lives it is going to live."""
         if render_mode is not None and render_mode not in self.metadata["render_modes"]:
             raise ValueError(f"unsupported render_mode {render_mode!r}")
         if max_steps <= 0:

@@ -182,17 +182,72 @@ when available; real GPU runs happen on the owner's machine), a spiking model.
 
 ## 9. What the implementation added (and where it deviates)
 
-**The largest deviation: the shipped brain was taught, not bred** (§4 said the
-481 numbers are "evolved by the existing strategy").
+**What the build found.** Three things turned out differently from §2 and §4.
+Each was found by a measurement and each changed the model or the way it is
+taught. They are told in the order they were found, because the later ones
+correct the earlier ones.
 
-- *Evolution from nothing stalls.* On the real graph (30 generations planned,
-  32 candidates, two lives of up to 1500 ticks each, about two minutes a
-  generation on this Mac) the centre reached the drink-rest-and-starve policy
-  by generation 3 (fitness 1315: a death at tick 899, the random brain's
-  lifespan) and by generation 10 every one of the 32 candidates scored exactly
-  1315. Rank-normalised scores that all tie give no step; the run was stopped.
-  The small network met the same wall and needed 120 generations to pass it;
-  at a hundred steps a second per core that is days here.
+*1. The network must be a contraction (model 2).* §2 chose a gain of 3 to 4
+"so the signal carries" and took the network's memory for a feature. The first
+brain taught at gain 3 lived a median 2751 ticks in the dojo and about 750 in
+a live garden, without a bite. The dojo hatched every fly at world tick 0; a
+garden hatches it whenever its owner joins; and born 300, 600 or 900 ticks
+into the day the same brain's median was 766, 744 and 644. Teaching on births
+at any hour (point 2) moved the failure instead of removing it: that brain
+lived close to 3000 born at ticks 30 to 1100, and about 1100 born exactly at
+dawn.
+
+The cause is in the dynamics. Two copies of the network were given the same
+life, one starting from rest and one from a random state
+(`spikes/malecns_throughput_spike.py` reports it as "echo": how far apart
+their pooled features still are after 100 ticks, relative to their size):
+
+| gain | 0.5 | 0.8 | 0.95 | 1.0 | 1.2 | 1.5 | 2.0 | 3.0 |
+|---|---|---|---|---|---|---|---|---|
+| real wiring | 0.000 | 0.000 | 0.000 | 0.001 | 0.083 | 0.159 | 1.093 | 1.723 |
+| control 1 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | not run | 0.000 |
+
+On the real wiring the network keeps activity of its own from a gain of about
+1.2, and what a readout sees then depends on how the life began: a readout
+taught in one such regime is lost in another. The shuffled control forgets at
+every gain tried. That is a property of the fly's wiring, and the one clear
+difference between the two graphs this sub-project found.
+
+At a gain of 1 or below the update is a contraction: each neuron's inputs sum
+to at most 1 in magnitude and tanh never stretches a difference, so two states
+move together by a factor of at most (1 − leak) + leak·gain per update. Hence:
+
+- `GAIN_CEILING = 1.0`: the genome's gain is held there whatever number
+  evolution reaches. A new brain starts at 0.5 (0.5 and 0.8 were each taught
+  for five rounds of four lives; 0.5 flew to the cap in more of the probe's
+  lives). At 0.5 a difference shrinks to 0.75³ = 0.42 of itself per world
+  tick: the network's "memory" (§2, §4) is now an echo of the last few ticks.
+- An echo is faint (mean |activity| of the descending neurons 0.0004 at gain
+  0.5 against 0.16 at gain 3), so the pooled features are multiplied by 500
+  before the readout, not 10, and the readout is fitted on standardised
+  features (some pooled features move tens of times more than others).
+- Brain files carry `model_version` 2; files of the old dynamics are refused.
+
+*2. Lives begin at any hour.* `NeuroGardenEnv(any_hour=True)` runs the world
+empty until `birth_tick(seed)` — a tick of the first day, fixed by the seed —
+before the fly hatches. Lessons are taught on such lives, `evolve --any-hour`
+breeds on them (a run that carries on keeps how its start was taught), and the
+connectome balance guard and `spikes/connectome_lifespans.py` measure them.
+The dojo's default, and the small network's evolution, are unchanged (dawn).
+
+*3. The shipped brain was taught, not bred* (§4 said the 481 numbers are
+"evolved by the existing strategy").
+
+- *Evolution from nothing.* On model 1 it froze: by generation 3 the centre
+  drank, rested and starved at tick 899 (fitness 1315), and by generation 10
+  all 32 candidates scored exactly 1315; tied ranks give no step. On model 2
+  it does not freeze (twelve generations of 32, two lives of up to 1500 ticks:
+  centre fitness 1647 at the first, 3684 at the last), but the fitness is
+  misleading: on the yardstick below that brain's median lifespan is 899, the
+  random brain's. It eats (up to 36 bites) or drinks (up to 895 times), never
+  both in one life; what rose was the bounty per bite. The small network
+  needed 120 generations to learn to live, at 2.5 minutes a generation here.
+  Whether evolution gets this brain there is open.
 - *So the readout is taught* (`neurogarden distil`, `dojo/distil.py`). The
   shipped evolved brain senses the same 25 features, so it can say for any
   moment how likely it would be to take each action. Round 1: it flies, the
@@ -201,48 +256,63 @@ when available; real GPU runs happen on the owner's machine), a spiking model.
   problem). Later rounds: the student flies, the teacher labels what the
   student met, and the fit is redone on everything so far (DAgger). The input
   side (25 gains, the network gain) keeps its starting values; `evolve
-  --start` can breed it afterwards. A lesson of five rounds of four lives
-  takes about five minutes.
-- *What the lesson showed about the model.* The teacher is almost linear in
-  its features: a readout fitted straight on the 25 features agrees with it on
-  98% of moments. Through the real wiring the same fit agrees on 76%. Measured
-  on a held-out life (`spikes/malecns_throughput_spike.py`, R² of a ridge fit
-  from the network back to each group of senses): the 64 pooled features
-  recover fruit smell at 0.24, humidity 0.40, nest smell 0.11, touch 0.11,
-  body 0.09, light 0.58; all 1,314 descending neurons recover 0.66, 0.78,
-  0.14, 0.47, 0.32, 0.97. So the pooling loses most of what reaches the
-  descending neurons, and not everything reaches them. The same measurement on
-  control 1: pooled 0.84, 0.82, 0.59, 0.23, 0.19, 0.91; all descending neurons
-  0.94, 0.94, 0.90, 0.51, 0.53, 0.99. The shuffled graph spreads every sense
-  over the descending neurons; the fly's wiring does not, and the gap is
-  widest for smell (fruit 0.24 against 0.84 in the pooled features). That is
-  the measured reason the control learns the lesson better. A wider readout
-  (256 features) fitted better and did not live longer; leak 1.0, six updates
-  a tick and other gains were no better than the defaults (gain 2 with doubled
-  input fits slightly better).
-- *How they live.* The shipped lesson is eight rounds of eight lives of up to
-  2400 ticks (`distil --rounds 8 --lives 8 --seed 1`, a quarter of an hour on
-  four cores), the same for the real graph and for control 1; every fit
-  settled. The real graph's readout agrees with the teacher on 67% of its
-  134,183 labelled moments (divergence 0.106), the control's on 91% of 145,701
-  (0.012). Ten lives of up to 3000 ticks (the balance guard): median 3000 for
-  both, seven of ten alive at the end for both. Twenty lives of up to 6000
-  ticks (`spikes/connectome_lifespans.py`; the evolved brain's median on this
-  yardstick is 5865, the random brain's 899): real wiring median 3916, mean
-  3711, six alive at the end; control median 5044, mean 4323, eight alive.
-  Paired by seed the real wiring lived longer on nine, the control on eight,
-  three were ties (Wilcoxon p = 0.38): twenty lives do not tell the lifespans
-  apart. How they die does differ: the real-wiring fly dies of thirst as often
-  as of hunger (seven and six of its fourteen deaths, one of both), the
-  control only ever starves.
-- *What may and may not be said.* The fly's wiring is not shown to help. The
-  control learns the lesson far better, and lives at least as long. One lesson
-  per graph is one sample: smaller lessons (five rounds of four lives) gave the
-  real graph medians of 2925 and 2128 over ten lives on two lesson seeds, so
-  the lesson's size and seed move the result as much as the graph does. A
-  comparison worth the name needs many lessons and many more lives — the
-  `bench` of sub-project 7 — and a readout that does not throw away what the
-  descending neurons carry.
+  --start` can breed it afterwards. The shipped lesson — eight rounds of eight
+  lives of up to 2400 ticks, `distil --rounds 8 --lives 8 --seed 1`, the same
+  for the real graph and for control 1 — takes ten minutes on four cores.
+- *What reaches the readout.* On a held-out life, how well each group of
+  senses can be read back (R² of a ridge fit on standardised features) from
+  the 64 pooled features, and from all 1,314 descending neurons, at gain 0.5:
+
+  | | fruit smell | humidity | nest smell | touch | body | light |
+  |---|---|---|---|---|---|---|
+  | real wiring, pooled | 0.88 | 0.95 | 0.87 | 0.93 | 0.61 | 1.00 |
+  | control 1, pooled | 0.98 | 0.97 | 0.96 | 0.89 | 0.98 | 1.00 |
+  | real wiring, all descending | 0.96 | 0.98 | 0.96 | 1.00 | 0.99 | 1.00 |
+  | control 1, all descending | 0.99 | 0.99 | 0.98 | 1.00 | 0.99 | 1.00 |
+
+  Both graphs carry the senses to the descending neurons; the pooling costs
+  the real wiring more, the body's needs most of all. An earlier version of
+  this measurement (gain 3, a ridge penalty on raw features) gave the real
+  wiring 0.24 for fruit smell and led to the conclusion that the wiring
+  scrambles the senses. That was the self-sustained activity and the fit, not
+  the wiring. A wider readout (256 features) was tried on model 1 only, where
+  it fitted better and did not live longer; it has not been tried on model 2.
+- *How they live.* The real graph's readout agrees with the teacher on 83% of
+  its 139,962 labelled moments (divergence 0.023), the control's on 96% of
+  143,758 (0.004); in every round both students flew to the 2400-tick cap at
+  the median, and every fit settled. The yardstick is twenty lives of up to
+  6000 ticks born at any hour (`spikes/connectome_lifespans.py`):
+
+  | brain | median | mean | alive at the end |
+  |---|---|---|---|
+  | hand-written survivor | 6000 | 6000 | 20 |
+  | evolved (the teacher) | 5772 | 4682 | 9 |
+  | connectome, real wiring | 4423 | 4056 | 6 |
+  | connectome, control 1 | 3745 | 3951 | 6 |
+  | random | 899 | 996 | 0 |
+
+  Paired by seed the real wiring lived longer on eleven, the control on
+  seven, two were ties (Wilcoxon p = 0.81): twenty lives do not tell them
+  apart. The balance guard (ten lives of up to 3000 ticks, born at any hour)
+  points the other way, real wiring 2475 and control 3000 — two samples of the
+  same uncertainty. Born at ticks 0, 300, 600, 900 and 1200 the real wiring
+  lives 3000 of 3000 at the median over four seeds at each, the control at
+  four of the five (2784 at tick 900); the real wiring is softer at dusk (born
+  at tick 750, two of four lives ended at 899; the teacher's, none).
+- *Live, and in company.* Ten shipped connectome flies in a 5 ticks/s garden
+  think for a median 62 ms of each 200 ms tick (the longest 138 ms) and miss
+  none in 2800. One alone lives as in the dojo. Ten together do not: first
+  lives of a median 1157 ticks for ten connectome flies, 1564 for ten of the
+  control, 1431 for ten evolved brains — most of them starved — and three
+  evolved brains together already fall to 3319. Ten hand-written survivors in
+  the same garden were all alive at tick 6000, so the garden feeds ten. The
+  evolved brain was bred alone, and what it teaches is to live alone.
+- *What may and may not be said.* The fly's wiring is not shown to help a
+  brain live, nor to hurt. The control learns the lesson more closely. What
+  the wiring does differently is hold activity of its own above gain 1.2 and
+  pass the body's needs less cleanly through this pooling. One lesson per
+  graph is one sample; a comparison worth the name needs many lessons, many
+  more lives, and company — the `bench` of sub-project 7.
 
 **Deviations from the sections above**
 
@@ -268,10 +338,10 @@ when available; real GPU runs happen on the owner's machine), a spiking model.
   The learned input gains are what evens that out.
 - **Actions out.** The projection is not sparse: every descending neuron feeds
   exactly one of the 64 buckets with a seeded sign, scaled by one over the
-  square root of the bucket's size. The pooled features are multiplied by a
-  fixed 10 before the readout, and the network gain is stored as its logarithm
-  and starts at 3 — both so that evolution's one step size suits all 481
-  numbers.
+  square root of the bucket's size (64 is the default; the width is a property
+  of the brain file, `--pooled`). The pooled features are multiplied by a
+  fixed 500 before the readout, and the network gain is stored as its
+  logarithm, starts at 0.5 and is held at 1 or below (see above).
 - **Trainable** (§6). The interface is `size`, `initial(rng, scale)`,
   `genome(vector)`, `brain(vector)`, `check_start(genome)` and `describe()`
   (what goes into the file's meta), not `build(vector)`.
@@ -293,20 +363,23 @@ when available; real GPU runs happen on the owner's machine), a spiking model.
 - `--weights FILE` alone picks the brain: the file says whether it is a small
   network or a connectome readout. `evolve --start FILE` inherits the brain,
   graph, pruning, control, substeps and readout width from the file — and its
-  step sizes (sigma, learning rate). A taught brain has none to hand on and is
-  carried on in small steps (0.01 and 0.0005). Measured from the shipped brain
-  on the real graph (eight candidates, two lives of up to 1500 ticks): at
-  sigma 0.1 the centre's fitness fell from 4245 to 1575 in one generation; at
-  0.01 with learning rate 0.01, to 1229; at 0.01 with 0.0005 it held (4245,
-  3666, 3448, 4597 over four generations, each on its own worlds). Whether
-  evolution then improves on the lesson is not measured: that takes many
-  generations.
+  step sizes (sigma, learning rate) and whether lives begin at any hour. A
+  taught brain has no step sizes to hand on and is carried on in small steps
+  (0.01 and 0.0005). Measured from the shipped brain on the real graph (eight
+  candidates, two lives of up to 1500 ticks, the same worlds in the first
+  generation): at sigma 0.1 and learning rate 0.05 no candidate beat the
+  centre (best 3518 against 3517, mean 2757) and the centre fell to about 2750
+  and stayed there; at 0.01 and 0.0005 the candidates' mean was 4346 and the
+  centre held
+  (3517, 5070, 4808, 5318 over four generations, each on its own worlds).
+  Whether evolution then improves on the lesson is not measured: that takes
+  many generations.
 - `brains.evolved` grew `choose` (the seeded softmax draw) and `sparkline`,
   shared by both learned brains.
 - **What a brain file is tied to.** The graph's hash covers the connections
   (in fixed number types, so it does not depend on how scipy stores them) and
   every neuron's class and superclass, because the labels decide which neurons
-  a sense drives. The file also carries `model_version` (1): the encoding
+  a sense drives. The file also carries `model_version` (now 2): the encoding
   table, the pooling and the update rule as code. Another hash or version is
   refused on load — and by `evolve --start`, which will not carry weights from
   one wiring onto another (the real graph onto its control, say).

@@ -34,10 +34,11 @@ from neurogarden.engine.tiles import parse_map
 
 Fitness = Callable[[EpisodeStats], float]
 BRAINS = ("evolved", "connectome")  # what can be bred
-# Carrying on from a taught brain (`dojo.distil`) takes small steps: at the usual sigma every
-# perturbation wrecks the taught readout and one generation undoes the lesson (measured on the
-# real graph: the centre's fitness fell from 4245 to 1575). The learning rate goes with the
-# square of sigma, so a step stays about a third of a perturbation.
+# Carrying on from a taught brain (`dojo.distil`) takes small steps: at the usual sigma no
+# perturbation of the taught readout does as well as the readout, and the lesson wears away
+# (measured on the real graph: the centre's fitness went from 3517 to about 2750 in a
+# generation; with these it held). The learning rate goes with the square of sigma, so a step
+# stays about a third of a perturbation.
 FINE_SIGMA = 0.01
 FINE_LEARNING_RATE = 0.0005
 

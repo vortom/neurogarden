@@ -158,32 +158,57 @@ learned sits around it — 25 input gains, one network gain and a 455-number
 readout, 481 numbers in all. It is a model inspired by real wiring, not a
 simulated fly.
 
-The shipped brain was taught, not bred. Evolving those numbers from nothing
-stalls on this graph: by the tenth generation every candidate drinks, rests
-and starves at tick 899, all scores tie, and the strategy has no slope left.
-The small evolved brain is past that wall and senses the same things, so it
-teaches (`neurogarden distil`): it flies while the connectome network senses
-the same moments, and the readout is fitted to its choices; then the student
-flies and the teacher says what it would have done, round after round. What
-the connectome fly knows about living, evolution found — for the small
-network. The wiring is what that knowledge has to pass through.
+The shipped brain was taught: the small evolved brain flies while the
+connectome network senses the same moments, and the readout is fitted to its
+choices; then the student flies and the teacher says what it would have done,
+round after round (`neurogarden distil`). What the connectome fly knows about
+living, evolution found — for the small network. The wiring is what that
+knowledge has to pass through. Breeding the same numbers from nothing
+(`evolve --brain connectome`) gets going — fitness climbs from the first
+generations — but twelve generations in it has made a fly that eats or drinks,
+never both, and lives no longer than the random one. The small network needed
+120 generations to learn to live; a lesson takes ten minutes.
 
-To keep that honest, every connectome brain ships with a **control**: the same
-brain taught the same lesson on a graph where each neuron receives another
-neuron's inputs (`connectome-random`) — the senses still reach the descending
-neurons there, by pathways no fly ever had. Twenty lives of up to 6000 ticks,
-the yardstick on which the evolved brain's median is 5865 and the random
-brain's 899: median lifespan **3916** on the real wiring, **5044** on the
-control. Read it as it is. The control copies its teacher far better — its
-readout agrees with the teacher on 91% of moments, the real wiring's on 67% —
-and twenty lives cannot tell the two lifespans apart (the real wiring outlived
-the control on nine seeds, the control on eight, three were ties). Nothing
-here says the fly's own wiring helps: in this model, on this task, a shuffled
-graph passes the senses on to the descending neurons more evenly than the real
-one does. That is what a control is for, and where the next questions are —
-which senses the real pathways carry well, and what a readout that respects
-them would look like. The balance guard (`uv run pytest -m slow`) flies ten
-shorter lives of each and prints both.
+Two things the build had to measure its way into (the spec has the numbers):
+
+- **The network is kept a contraction** — its gain is held at 1 or below, so
+  its state is an echo of what the fly senses, and two copies that began
+  differently agree again within a few ticks. Above a gain of about 1.2 the
+  real wiring keeps activity of its own and never forgets how a life began; a
+  brain taught that way lived 3000 ticks in the dojo and 750 in a live garden.
+  The shuffled control forgets at any gain: that much is the wiring's own
+  doing.
+- **Lives are taught and measured born at any hour of the day**, as flies in a
+  live garden are. The dojo used to hatch every fly at dawn.
+
+To keep all this honest, every connectome brain ships with a **control**: the
+same brain taught the same lesson on a graph where each neuron receives
+another neuron's inputs (`connectome-random`) — the senses still reach the
+descending neurons there, by pathways no fly ever had. Twenty lives of up to
+6000 ticks, born at any hour:
+
+| brain | median lifespan | alive at the end |
+|---|---|---|
+| hand-written survivor | 6000 | 20 of 20 |
+| evolved (the teacher) | 5772 | 9 of 20 |
+| **connectome, real wiring** | **4423** | 6 of 20 |
+| connectome, shuffled control | 3745 | 6 of 20 |
+| random | 899 | 0 of 20 |
+
+Read it as it is. Twenty lives cannot tell the real wiring from the control
+(the real wiring outlived the control on eleven seeds, the control on seven,
+two were ties), and the control copies its teacher more closely — its readout
+agrees with the teacher on 96% of moments, the real wiring's on 83%. Nothing
+here says the fly's own wiring helps, and nothing says it hurts. The balance
+guard (`uv run pytest -m slow`) flies ten shorter lives of each and prints
+both.
+
+One more thing to know before filling a garden: the evolved brain was bred
+alone, and so was everything it taught. Ten of them together compete badly —
+first lives of a median 1431 ticks for ten evolved brains, 1157 for ten
+connectome flies, 1564 for ten of the control, most of them starved — while
+ten hand-written survivors in the same garden all live. The garden feeds ten;
+these brains have not learned to share it.
 
 ```bash
 uv sync --extra connectome                     # scipy + pyarrow
@@ -197,27 +222,27 @@ uv run neurogarden flock --brain connectome-random --count 3   # and three of th
 `flock` runs N brains in one process, each its own owner (`cns-1` … `cns-10`;
 `rnd-…` for the control, the file's name for `--weights mine.npz`) with its own
 lives, its own stream of chance and its own place in the hall of flies;
-connectome brains share one wiring and are stepped together. Unlike the small
-network, this brain has a memory: its network state persists from tick to tick
-within a life. Its speech bubble shows sixteen of its pooled descending
-features.
+connectome brains share one wiring and are stepped together. The network's
+state carries over from tick to tick, but only as an echo of the last few
+ticks. The speech bubble shows sixteen of the pooled descending features.
 
 Teach your own (`--control SEED` teaches the control instead). Evolution can
 carry on from a taught brain — it breeds the input side too, and writes the
 weights after every generation, so a long run can be stopped — but only in
-small steps, which `evolve --start` takes by itself: at the usual step size one
-generation undoes the lesson. Whether evolution then improves on the lesson is
-not measured yet.
+small steps, which `evolve --start` takes by itself: at the usual step size the
+lesson wears away within a generation. Whether evolution then improves on the
+lesson is not measured yet.
 
 ```bash
-uv run neurogarden distil --out mine.npz --rounds 8 --lives 8   # the shipped lesson (--seed 1): a quarter of an hour
+uv run neurogarden distil --out mine.npz --rounds 8 --lives 8   # the shipped lesson (--seed 1): ten minutes
 uv run neurogarden evolve --start mine.npz --out bred.npz --generations 10 --max-steps 1500
 uv run neurogarden flock --weights mine.npz --count 5       # owners mine-1 … mine-5
 ```
 
-On a CPU one update of the central graph costs a few milliseconds per fly, so
-ten flies fit a 5 ticks/s world. The full graph is a GPU job: the same model
-runs on torch when it is installed (`backend="torch"`); see the roadmap.
+On a CPU one update of the central graph costs a few milliseconds per fly:
+ten flies in a 5 ticks/s world think for about 62 ms of each 200 ms tick and
+miss none. The full graph is a GPU job: the same model runs on torch when it
+is installed (`backend="torch"`); see the roadmap.
 
 ## Quick start: the dojo
 

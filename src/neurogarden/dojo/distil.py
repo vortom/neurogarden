@@ -66,9 +66,8 @@ class DistilConfig:
     # The input side is not learned here; these set it (evolution can move it afterwards).
     gain: float = INITIAL_GAIN
     input_gain: float = 1.0
-    # Lives begin at any hour of the day, as they do in a live garden. Taught on dawn births
-    # alone, the shipped lesson made a fly that lived 2750 ticks born at dawn and 750 born at
-    # any other hour: its age and the daylight had never come apart.
+    # Lives begin at any hour of the day, as they do in a live garden: a lesson should show
+    # the student the lives it is going to live, not only those that begin at dawn.
     any_hour: bool = True
 
     def __post_init__(self) -> None:
@@ -208,7 +207,7 @@ def fit_readout(
     iterations; agreement and divergence are measured on the moments it was fitted to.
 
     The fit is made on standardised features — each in units of its own spread — and handed
-    back for the features as they are: some pooled features move thirty times more than
+    back for the features as they are: some pooled features move tens of times more than
     others, and a penalty on raw weights would silence the quiet ones.
     """
     require_scipy()
