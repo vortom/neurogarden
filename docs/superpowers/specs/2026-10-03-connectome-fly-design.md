@@ -283,7 +283,8 @@ The dojo's default, and the small network's evolution, are unchanged (dawn).
 - *How they live.* The real graph's readout agrees with the teacher on 83% of
   its 139,962 labelled moments (divergence 0.023), the control's on 96% of
   143,758 (0.004); in every round both students flew to the 2400-tick cap at
-  the median, and every fit settled. The yardstick is twenty lives of up to
+  the median, and every fit settled. Run again on the final code, both lessons
+  gave the shipped weights bit for bit. The yardstick is twenty lives of up to
   6000 ticks born at any hour (`spikes/connectome_lifespans.py`):
 
   | brain | median | mean | alive at the end |
