@@ -52,3 +52,33 @@ def test_the_evolved_brain_outlives_the_random_one():
     print(f"\nmedian lifespan: evolved {evolved}, random {random}")
     assert evolved >= 4000, "the shipped weights should live most of a long life"
     assert evolved >= 2 * random, "evolution should at least double a random brain's life"
+
+
+@pytest.mark.slow
+def test_the_connectome_brain_is_reported_beside_its_control():
+    """Real wiring against shuffled wiring, taught alike. The number is the point: it is
+    printed, and only living longer than a random brain is asserted — whether the wiring helps
+    is a result, not a requirement."""
+    pytest.importorskip("scipy")
+    from neurogarden.brains import ConnectomeBrain, RandomGraphBrain
+    from neurogarden.connectome import data
+
+    if not all(path.exists() for path in data.graph_paths("central", data.DEFAULT_MIN_SYNAPSES)):
+        pytest.skip("needs the cached MaleCNS graph: `neurogarden connectome build`")
+    ConnectomeBrain()  # with the graph here, weights that do not load are a failure, not a skip
+    RandomGraphBrain()
+    env = NeuroGardenEnv(max_steps=3000, any_hour=True)  # born at any hour, as in a live garden
+    seeds = range(10)
+
+    def median(brain_cls):
+        return statistics.median(run_episode(env, brain_cls(), seed=s).lifespan for s in seeds)
+
+    connectome, control, random = (
+        median(ConnectomeBrain),
+        median(RandomGraphBrain),
+        median(RandomBrain),
+    )
+    print(
+        f"\nmedian lifespan: connectome {connectome}, shuffled control {control}, random {random}"
+    )
+    assert connectome > random, "the taught connectome brain should outlive a random one"

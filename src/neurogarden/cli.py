@@ -8,6 +8,8 @@ import argparse
 import asyncio
 import json
 import logging
+import re
+import statistics
 import sys
 import time
 from collections import defaultdict
@@ -15,14 +17,33 @@ from pathlib import Path
 
 import numpy as np
 
-from neurogarden.brains import BRAINS, EvolvedBrain, Genome
-from neurogarden.dojo.evolve import EvolveConfig, evolve
+from neurogarden.brains import BRAINS, WEIGHTED, ConnectomeGenome, Genome
+from neurogarden.brains.evolved import weights_kind
+from neurogarden.connectome import data as connectome_data
+from neurogarden.connectome.data import VARIANTS
+from neurogarden.connectome.model import POOLED
+from neurogarden.dojo.distil import DistilConfig, distil
+from neurogarden.dojo.evolve import BRAINS as BREEDABLE
+from neurogarden.dojo.evolve import (
+    FINE_LEARNING_RATE,
+    FINE_SIGMA,
+    EvolveConfig,
+    evolve,
+    fine_learning_rate,
+)
 from neurogarden.dojo.render_ansi import AgentGlimpse, View, render_view
 from neurogarden.dojo.stats import FITNESSES
 from neurogarden.engine import RULES_VERSION
 from neurogarden.engine.clock import day_number
 from neurogarden.protocol import ProtocolError, build_catalog, schema_text
-from neurogarden.sdk import DEFAULT_URL, AsyncClient, ConnectionLost, ServerError, run_brain
+from neurogarden.sdk import (
+    DEFAULT_URL,
+    AsyncClient,
+    ConnectionLost,
+    ServerError,
+    run_brain,
+    run_flock,
+)
 from neurogarden.server import Archive, ServerConfig, history, parse_npc, serve
 from neurogarden.server import frames as server_frames
 from neurogarden.server.archive import MEMORY, ArchiveError, Life
@@ -105,14 +126,61 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("schema", help="print the protocol JSON Schema")
 
-    evolve_cmd = commands.add_parser("evolve", help="evolve a tiny brain in the dojo")
+    flock_cmd = commands.add_parser(
+        "flock", help="connect several brains at once, each its own owner"
+    )
+    flock_cmd.add_argument("--brain", choices=sorted(BRAINS), default=None)
+    flock_cmd.add_argument("--count", type=int, default=5, help="how many flies")
+    flock_cmd.add_argument(
+        "--owner-prefix", default=None, help="owners are PREFIX-1 … PREFIX-N (default: the brain)"
+    )
+    flock_cmd.add_argument("--seed", type=int, default=0)
+    flock_cmd.add_argument("--lives", type=int, default=None, help="lives per fly, then stop")
+    flock_cmd.add_argument(
+        "--weights", default=None, metavar="FILE.npz", help="the brains' own weights"
+    )
+    _add_connection_args(flock_cmd)
+
+    connectome_cmd = commands.add_parser(
+        "connectome", help="the MaleCNS wiring: fetch the files, build a graph, see what is cached"
+    )
+    connectome_cmd.add_argument("action", choices=("fetch", "build", "info"))
+    connectome_cmd.add_argument("--graph", choices=VARIANTS, default="central")
+    connectome_cmd.add_argument(
+        "--min-synapses", type=int, default=connectome_data.DEFAULT_MIN_SYNAPSES
+    )
+
+    evolve_cmd = commands.add_parser("evolve", help="evolve a brain in the dojo")
+    evolve_cmd.add_argument(
+        "--brain", choices=BREEDABLE, default=None, help="what to breed (default evolved)"
+    )
+    evolve_cmd.add_argument(
+        "--graph", choices=VARIANTS, default=None, help="connectome: which graph"
+    )
+    evolve_cmd.add_argument("--min-synapses", type=int, default=None, help="connectome only")
+    evolve_cmd.add_argument(
+        "--control", type=int, default=None, metavar="SEED",
+        help="connectome: breed on the row-shuffled graph (the control)",
+    )  # fmt: skip
+    evolve_cmd.add_argument("--substeps", type=int, default=None, help="connectome only")
+    evolve_cmd.add_argument(
+        "--pooled", type=int, default=None, help="connectome: features the readout sees"
+    )
     evolve_cmd.add_argument("--out", required=True, metavar="FILE.npz", help="where the weights go")
     evolve_cmd.add_argument("--generations", type=int, default=EvolveConfig.generations)
     evolve_cmd.add_argument("--population", type=int, default=EvolveConfig.population)
     evolve_cmd.add_argument("--episodes", type=int, default=EvolveConfig.episodes)
     evolve_cmd.add_argument("--max-steps", type=int, default=EvolveConfig.max_steps)
-    evolve_cmd.add_argument("--sigma", type=float, default=EvolveConfig.sigma)
-    evolve_cmd.add_argument("--learning-rate", type=float, default=EvolveConfig.learning_rate)
+    evolve_cmd.add_argument(
+        "--sigma", type=float, default=None,
+        help=f"how far a perturbation reaches (default {EvolveConfig.sigma}; carrying on: the "
+        f"start's; from a taught brain {FINE_SIGMA})",
+    )  # fmt: skip
+    evolve_cmd.add_argument(
+        "--learning-rate", type=float, default=None,
+        help=f"default {EvolveConfig.learning_rate}; carrying on: the start's; from a taught "
+        f"brain {FINE_LEARNING_RATE}, or in that ratio to the square of --sigma",
+    )  # fmt: skip
     evolve_cmd.add_argument(
         "--hidden", type=int, default=None, help=f"neurons (default {EvolveConfig.hidden})"
     )
@@ -133,6 +201,46 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evolve_cmd.add_argument(
         "--start", default=None, metavar="FILE.npz", help="carry on from these weights"
+    )
+    evolve_cmd.add_argument(
+        "--any-hour", action=argparse.BooleanOptionalAction, default=None,
+        help="lives begin at any hour of the day, as in a live garden, not at dawn "
+        "(default: no; carrying on: as the start was bred or taught)",
+    )  # fmt: skip
+
+    distil_cmd = commands.add_parser(
+        "distil", help="teach a connectome brain its readout from the evolved brain"
+    )
+    distil_cmd.add_argument("--out", required=True, metavar="FILE.npz", help="where the weights go")
+    distil_cmd.add_argument(
+        "--teacher", default=None, metavar="FILE.npz", help="an evolved brain (default: shipped)"
+    )
+    distil_cmd.add_argument("--graph", choices=VARIANTS, default=DistilConfig.graph)
+    distil_cmd.add_argument("--min-synapses", type=int, default=DistilConfig.min_synapses)
+    distil_cmd.add_argument(
+        "--control", type=int, default=None, metavar="SEED",
+        help="learn on the row-shuffled graph (the control)",
+    )  # fmt: skip
+    distil_cmd.add_argument("--substeps", type=int, default=DistilConfig.substeps)
+    distil_cmd.add_argument("--pooled", type=int, default=DistilConfig.pooled)
+    distil_cmd.add_argument(
+        "--gain", type=float, default=DistilConfig.gain, help="the network gain (not learned here)"
+    )
+    distil_cmd.add_argument(
+        "--input-gain", type=float, default=DistilConfig.input_gain,
+        help="how hard the senses drive their neurons (not learned here)",
+    )  # fmt: skip
+    distil_cmd.add_argument(
+        "--rounds", type=int, default=DistilConfig.rounds,
+        help="the teacher flies the first, the student the others",
+    )  # fmt: skip
+    distil_cmd.add_argument("--lives", type=int, default=DistilConfig.lives, help="per round")
+    distil_cmd.add_argument("--max-steps", type=int, default=DistilConfig.max_steps)
+    distil_cmd.add_argument("--temperature", type=float, default=DistilConfig.temperature)
+    distil_cmd.add_argument("--seed", type=int, default=DistilConfig.seed)
+    distil_cmd.add_argument("--map", default=DistilConfig.map, help="the world to learn in")
+    distil_cmd.add_argument(
+        "--workers", type=int, default=None, help="processes flying the lives (default: all cores)"
     )
 
     lives_cmd = commands.add_parser("lives", help="the hall of flies: every life in an archive")
@@ -202,13 +310,22 @@ def cmd_serve(args) -> int:
     return 0
 
 
-def _make_brain(args):
-    kind = args.brain or ("evolved" if args.weights is not None else "scripted")
-    if args.weights is not None:
-        if kind != "evolved":
-            raise ValueError("--weights is for --brain evolved")
-        return EvolvedBrain(seed=args.seed, path=args.weights)
-    return BRAINS[kind](seed=args.seed)
+def _obituary(owner: str, name: str, lineage: int, stats) -> str:
+    causes = ", ".join(stats.death_causes) or "unknown"
+    return (
+        f"{owner}'s {name} (#{lineage}) lived {stats.lifespan} ticks "
+        f"({stats.days} days) | {causes} | bites {stats.bites} drinks {stats.drinks}"
+    )
+
+
+def _make_brain(args, seed: int | None = None):
+    seed = args.seed if seed is None else seed
+    if args.weights is None:
+        return BRAINS[args.brain or "scripted"](seed=seed)
+    kind = args.brain or weights_kind(args.weights)
+    if kind not in WEIGHTED:
+        raise ValueError("--weights is for --brain evolved or connectome")
+    return WEIGHTED[kind](seed=seed, path=args.weights)
 
 
 def cmd_join(args) -> int:
@@ -218,12 +335,7 @@ def cmd_join(args) -> int:
         return _refuse(err)
 
     def report(fly) -> None:
-        stats = fly.stats
-        causes = ", ".join(stats.death_causes) or "unknown"
-        print(
-            f"{args.owner}'s {fly.name} (#{fly.lineage}) lived {stats.lifespan} ticks "
-            f"({stats.days} days) | {causes} | bites {stats.bites} drinks {stats.drinks}"
-        )
+        print(_obituary(args.owner, fly.name, fly.lineage, fly.stats))
 
     try:
         run_brain(
@@ -478,18 +590,73 @@ def cmd_verify(args) -> int:
     return 0
 
 
+def _writable(target: str) -> None:
+    out_dir = Path(target).resolve().parent
+    if not out_dir.is_dir():  # found out now, not after the last generation
+        raise ValueError(f"cannot write to {out_dir}: no such directory")
+
+
+def _on_graph(trainable) -> str:
+    wiring = trainable.ready()
+    control = "" if wiring.control is None else f", random control {wiring.control}"
+    return (
+        f"a connectome brain on the {wiring.variant} graph ({wiring.n} neurons, "
+        f"{wiring.connections} connections{control})"
+    )
+
+
+def _keeper(target: str):
+    """Where a long run's weights go and the function that writes them after each of its
+    steps — beside the name, then renamed, so the file is whole or absent and a run cut
+    short keeps what it had. Also the list of steps written so far."""
+    out = Path(target)
+    out = out if out.suffix == ".npz" else out.with_name(out.name + ".npz")
+    saved: list[int] = []
+
+    def keep(result) -> None:
+        partial = result.genome.save(out.with_name(out.stem + ".part.npz"), result.meta)
+        partial.replace(out)
+        saved.append(len(result.history))
+
+    return out, keep, saved
+
+
 def cmd_evolve(args) -> int:
     try:
         start = parent = None
         if args.start is not None:
-            start, parent = Genome.load(args.start)
+            loader = ConnectomeGenome if weights_kind(args.start) == "connectome" else Genome
+            start, parent = loader.load(args.start)
         # Carrying on from weights keeps their shape and settings unless told otherwise.
         inherited = parent or {}
+
+        def setting(given, key):
+            return given if given is not None else inherited.get(key, getattr(EvolveConfig, key))
+
+        # A taught brain has never been bred, so it has no step sizes to hand on: small ones,
+        # or the first generation undoes the lesson.
+        taught = bool(inherited.get("distilled")) and "sigma" not in inherited
+        steps = {}
+        if taught:  # the learning rate goes with the sigma it is given, in the same ratio
+            sigma = args.sigma if args.sigma is not None else FINE_SIGMA
+            steps = {"sigma": sigma, "learning_rate": fine_learning_rate(sigma)}
+
+        def step(given, key):
+            return given if given is not None else steps.get(key, setting(None, key))
+
         config = EvolveConfig(
+            brain=args.brain or inherited.get("brain") or EvolveConfig.brain,
+            graph=args.graph or inherited.get("graph") or EvolveConfig.graph,
+            min_synapses=setting(args.min_synapses, "min_synapses"),
+            control=args.control if args.control is not None else inherited.get("control"),
+            substeps=setting(args.substeps, "substeps"),
+            # the start's own width, whatever its meta says or leaves out
+            pooled=args.pooled if args.pooled is not None else getattr(start, "pooled", POOLED),
+            any_hour=bool(setting(args.any_hour, "any_hour")),
             generations=args.generations,
             population=args.population,
-            sigma=args.sigma,
-            learning_rate=args.learning_rate,
+            sigma=step(args.sigma, "sigma"),
+            learning_rate=step(args.learning_rate, "learning_rate"),
             hidden=(
                 args.hidden
                 if args.hidden is not None
@@ -507,9 +674,23 @@ def cmd_evolve(args) -> int:
                 else inherited.get("temperature", EvolveConfig.temperature)
             ),
         )
-        out_dir = Path(args.out).resolve().parent
-        if not out_dir.is_dir():  # found out now, not after the last generation
-            raise ValueError(f"cannot write to {out_dir}: no such directory")
+        _writable(args.out)
+        if config.brain == "connectome":
+            what = _on_graph(config.trainable())  # refused here if the graph is not cached
+        else:
+            connectome_only = {
+                "--graph": args.graph,
+                "--min-synapses": args.min_synapses,
+                "--control": args.control,
+                "--substeps": args.substeps,
+                "--pooled": args.pooled,
+            }
+            given = [flag for flag, value in connectome_only.items() if value is not None]
+            if given:  # said out loud, not silently dropped
+                raise ValueError(f"{', '.join(given)}: only for --brain connectome")
+            what = f"a {config.hidden}-neuron brain"
+        if start is not None:  # refused now, not after the banner
+            config.trainable().check_start(start, parent)
     except (ValueError, OSError) as err:
         return _refuse(err)
 
@@ -521,25 +702,161 @@ def cmd_evolve(args) -> int:
             flush=True,
         )
 
+    born = "at any hour" if config.any_hour else "at dawn"
     print(
-        f"evolving a {config.hidden}-neuron brain: {config.generations} generations of "
+        f"evolving {what}: {config.generations} generations of "
         f"{config.population}, {config.episodes} lives each up to {config.max_steps} ticks, "
-        f"fitness {config.fitness}, temperature {config.temperature}"
+        f"fitness {config.fitness}, temperature {config.temperature}, sigma {config.sigma}, "
+        f"learning rate {config.learning_rate}, born {born}"
     )
+    out, keep, saved = _keeper(args.out)
     try:
-        result = evolve(config, start=start, on_generation=report, parent=parent)
-        written = result.genome.save(args.out, result.meta)
+        evolve(config, start=start, on_generation=report, parent=parent, checkpoint=keep)
     except KeyboardInterrupt:
-        print("stopped; nothing written", file=sys.stderr)
+        kept = f"{out} holds generation {saved[-1]}" if saved else "nothing written"
+        print(f"stopped; {kept}", file=sys.stderr)
         return 1
     except (ValueError, OSError) as err:
         return _refuse(err)
-    print(f"wrote {written}")
+    print(f"wrote {out}")
+    return 0
+
+
+def cmd_distil(args) -> int:
+    try:
+        config = DistilConfig(
+            rounds=args.rounds,
+            lives=args.lives,
+            max_steps=args.max_steps,
+            seed=args.seed,
+            workers=args.workers,
+            map=args.map,
+            temperature=args.temperature,
+            teacher=args.teacher,
+            graph=args.graph,
+            min_synapses=args.min_synapses,
+            control=args.control,
+            substeps=args.substeps,
+            pooled=args.pooled,
+            gain=args.gain,
+            input_gain=args.input_gain,
+        )
+        _writable(args.out)
+        what = _on_graph(config.trainable())  # refused here if the graph is not cached
+        if args.teacher is not None:
+            Genome.load(args.teacher)  # and here if the teacher is not an evolved brain
+    except (ValueError, OSError) as err:
+        return _refuse(err)
+
+    def report(entry) -> None:
+        lived = statistics.median(entry.lifespans)
+        unsettled = "" if entry.settled else ", fit not settled"
+        print(
+            f"round {entry.index + 1}/{config.rounds}: the {entry.flown_by} flew, median "
+            f"lifespan {lived:.0f} | {entry.ticks} moments, agreement {entry.agreement:.2f}, "
+            f"divergence {entry.divergence:.3f}{unsettled}  ({entry.seconds:.1f}s)",
+            flush=True,
+        )
+
+    print(
+        f"teaching {what}: {config.rounds} rounds of {config.lives} lives up to "
+        f"{config.max_steps} ticks born at any hour, {config.pooled} pooled features, "
+        f"teacher {config.teacher or 'the shipped evolved brain'}"
+    )
+    out, keep, saved = _keeper(args.out)
+    try:
+        distil(config, on_round=report, checkpoint=keep)
+    except KeyboardInterrupt:
+        kept = f"{out} holds round {saved[-1]}" if saved else "nothing written"
+        print(f"stopped; {kept}", file=sys.stderr)
+        return 1
+    except (ValueError, OSError) as err:
+        return _refuse(err)
+    print(f"wrote {out}")
+    return 0
+
+
+def cmd_flock(args) -> int:
+    if args.count < 1:
+        return _refuse(ValueError("--count must be at least 1"))
+    try:
+        kind = args.brain or (weights_kind(args.weights) if args.weights else "connectome")
+        args.brain = kind
+        if args.weights and kind == "connectome":  # bred on a shuffled graph: the control,
+            _, bred = ConnectomeGenome.load(args.weights)  # whatever the file is called
+            kind = "connectome" if bred.get("control") is None else "connectome-random"
+        if args.owner_prefix:
+            prefix = args.owner_prefix
+        elif args.weights:  # its own owners, so it does not take over the shipped flock's flies
+            prefix = re.sub(r"[^A-Za-z0-9_.-]", "-", Path(args.weights).stem)[:48] or kind
+        else:
+            prefix = {"connectome": "cns", "connectome-random": "rnd"}.get(kind, kind)
+        seeds = [args.seed + index for index in range(args.count)]
+        brains = [_make_brain(args, seed=seed) for seed in seeds]
+        owners = [f"{prefix}-{index + 1}" for index in range(args.count)]
+
+        def report(life) -> None:
+            print(_obituary(life.owner, life.name, life.lineage, life.stats), flush=True)
+
+        print(f"flying {args.count} {kind} flies as {owners[0]} … {owners[-1]}", flush=True)
+        run_flock(
+            args.url,
+            brains,
+            owners,
+            token=args.token,
+            lives=args.lives,
+            on_life=report,
+            seeds=seeds,
+        )
+    except (*_REFUSALS, OSError) as err:
+        return _refuse(err)
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+def cmd_connectome(args) -> int:
+    try:
+        if args.action == "fetch":
+            shown: dict[str, int] = {}
+
+            def progress(name: str, done: int, total: int | None) -> None:
+                tenth = done * 10 // total if total else done >> 27  # every 10%, or 128 MB
+                if shown.get(name) != tenth:
+                    shown[name] = tenth
+                    of = f" of {total / 1e6:.0f} MB" if total else ""
+                    print(f"{name}: {done / 1e6:.0f} MB{of}", flush=True)
+
+            for path in connectome_data.fetch(on_progress=progress):
+                print(f"have {path}")
+        elif args.action == "build":
+            wiring = connectome_data.build(args.graph, args.min_synapses, on_progress=print)
+            print(f"built {wiring.variant} (>= {wiring.min_synapses} synapses): {wiring.digest}")
+        else:
+            report = connectome_data.info()
+            print(f"cache: {report['cache']}")
+            for key, size in report["sources"].items():
+                print(f"  {key:<13} {'missing' if size is None else f'{size / 1e6:.0f} MB'}")
+            for graph in report["graphs"]:
+                print(
+                    f"  graph {graph['graph']} (>= {graph['min_synapses']} synapses): "
+                    f"{graph['neurons']} neurons, {graph['connections']} connections, "
+                    f"{graph['digest']}"
+                )
+            for name in report["broken"]:
+                print(f"  {name}: cannot be read; run `neurogarden connectome build` again")
+            if not report["graphs"]:
+                print("  no graph built yet: `neurogarden connectome build`")
+    except (ValueError, OSError) as err:
+        return _refuse(err)
     return 0
 
 
 COMMANDS = {
     "evolve": cmd_evolve,
+    "distil": cmd_distil,
+    "flock": cmd_flock,
+    "connectome": cmd_connectome,
     "serve": cmd_serve,
     "join": cmd_join,
     "watch": cmd_watch,

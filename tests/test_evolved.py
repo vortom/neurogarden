@@ -164,6 +164,12 @@ def test_evolve_is_deterministic_and_lives_are_reproducible():
     resumed = evolve(SMALL, start=first.genome, parent=first.meta)
     assert not np.array_equal(resumed.genome.to_vector(), first.genome.to_vector())
     assert resumed.meta["total_generations"] == 4 and resumed.meta["parent"]["generations"] == 2
+    # Carrying on is not starting over: with the same seed, a run with generations behind it
+    # draws other worlds and other noise than a first run from the same weights would.
+    afresh = evolve(SMALL, start=first.genome)
+    assert not np.array_equal(resumed.genome.to_vector(), afresh.genome.to_vector())
+    again = evolve(SMALL, start=first.genome, parent=first.meta)
+    assert np.array_equal(resumed.genome.to_vector(), again.genome.to_vector())
     with pytest.raises(ValueError, match="hidden neurons"):
         evolve(SMALL, start=Genome.zeros(2))
 

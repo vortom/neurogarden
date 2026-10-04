@@ -27,8 +27,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ascii", action="store_true", help="plain ASCII instead of emoji")
     args = parser.parse_args(argv)
 
+    try:
+        brain = BRAINS[args.brain](seed=args.seed)
+    except (ValueError, OSError) as err:  # weights or a graph it needs are not here
+        print(f"neurogarden: {err}", file=sys.stderr)
+        return 1
     env = NeuroGardenEnv(max_steps=args.max_steps)
-    brain = BRAINS[args.brain](seed=args.seed)
     observation, info = env.reset(seed=args.seed)
     brain.reset(brain_seed(args.seed))
 

@@ -14,14 +14,15 @@ The first world is **Drosoville**.
 
 ## Status
 
-All five sub-projects: the simulation **engine**, the training **dojo**, the
+Six sub-projects so far: the simulation **engine**, the training **dojo**, the
 **live world** — a server, a wire protocol and a Python SDK, so several brains
 can live in one Drosoville at the same time — the **browser client**, a
 pixel-art view of the garden you can also play in, the **archive**: a world
 that survives its process, and lives that can be watched again as ghosts or
-exported as datasets, and the **first learned brain**: a tiny network evolved
-in the dojo, living in the garden with its neurons showing. See
-`docs/superpowers/specs/`.
+exported as datasets, the **first learned brain**: a tiny network evolved
+in the dojo, living in the garden with its neurons showing, and the
+**connectome fly**: a brain that runs on the wiring of the MaleCNS connectome,
+with a random-graph control beside it. See `docs/superpowers/specs/`.
 
 Where it is going: a **life and evolution simulator for small minds** — real
 fly wiring (MaleCNS), learned brains and humans in one world, every life
@@ -138,6 +139,110 @@ eats; wellbeing alone breeds a fly that drinks, rests and starves at tick 899
 drawing from the softmax of its scores at the temperature it was evolved at (a
 policy that always does the same thing gives evolution nothing to rank), with
 its own seeded generator, so a life is reproducible.
+
+## The connectome fly
+
+A brain built on real wiring. `ConnectomeBrain` runs a leaky rate network on
+the central brain of the MaleCNS connectome — 50,668 neurons and 2,425,802
+connections of at least five synapses, out of the 165,122 traced neurons and
+25,563,197 connections of the whole dataset (Janelia FlyEM, MaleCNS v1.0,
+CC-BY 4.0). Smell, taste and touch drive fixed groups of sensory neurons, the
+body's needs drive dopamine and endocrine neurons, light drives visual
+projection neurons; the activity of the 1,314 descending neurons, pooled, is
+read out into the seven actions.
+
+What this is, and is not: the *connections* are real. The neuron equation, the
+signs given to transmitters, which neurons "smell fruit" and the readout are
+this project's modelling choices, and the wiring is never trained. What is
+learned sits around it — 25 input gains, one network gain and a 455-number
+readout, 481 numbers in all. It is a model inspired by real wiring, not a
+simulated fly.
+
+The shipped brain was taught: the small evolved brain flies while the
+connectome network senses the same moments, and the readout is fitted to its
+choices; then the student flies and the teacher says what it would have done,
+round after round (`neurogarden distil`). What the connectome fly knows about
+living, evolution found — for the small network. The wiring is what that
+knowledge has to pass through. Breeding the same numbers from nothing
+(`evolve --brain connectome`) gets going — fitness climbs from the first
+generations — but twelve generations in it has made a fly that eats or drinks,
+never both, and lives no longer than the random one. The small network needed
+120 generations to learn to live; a lesson takes ten minutes.
+
+Two things the build had to measure its way into (the spec has the numbers):
+
+- **The network is kept a contraction** — its gain is held below 1, so its
+  state is an echo of what the fly senses, and two copies that began
+  differently agree again within a few ticks. From a gain of 1.2, the first
+  tried above 1, the real wiring keeps activity of its own and does not forget
+  how a life began; a brain taught at gain 3 lived a median 2751 ticks in the
+  dojo and about 750 in a live garden. The shuffled control forgot at every
+  gain tried, up to 3: that much looks like the wiring's own doing.
+- **Lives are taught and measured born at any hour of the day**, as flies in a
+  live garden are. The dojo used to hatch every fly at dawn.
+
+To keep all this honest, every connectome brain ships with a **control**: the
+same brain taught the same lesson on a graph where each neuron receives
+another neuron's inputs (`connectome-random`) — the senses still reach the
+descending neurons there, by pathways no fly ever had. Twenty lives of up to
+6000 ticks, born at any hour:
+
+| brain | median lifespan | alive at the end |
+|---|---|---|
+| hand-written survivor | 6000 | 20 of 20 |
+| evolved (the teacher) | 5772 | 9 of 20 |
+| **connectome, real wiring** | **4423** | 6 of 20 |
+| connectome, shuffled control | 3745 | 6 of 20 |
+| random | 899 | 0 of 20 |
+
+Read it as it is. Twenty lives cannot tell the real wiring from the control
+(the real wiring outlived the control on eleven seeds, the control on seven,
+two were ties), and the control copies its teacher more closely — its readout
+agrees with the teacher on 96% of moments, the real wiring's on 83%. Nothing
+here says the fly's own wiring helps, and nothing says it hurts. The balance
+guard (`uv run pytest -m slow`) flies ten shorter lives of each and prints
+both.
+
+One more thing to know before filling a garden: the evolved brain was bred
+alone, and so was everything it taught. Ten of them together compete badly —
+first lives of a median 1431 ticks for ten evolved brains, 1157 for ten
+connectome flies, 1564 for ten of the control, most of them starved — while
+ten hand-written survivors in the same garden all live. The garden feeds ten;
+these brains have not learned to share it.
+
+```bash
+uv sync --extra connectome                     # scipy + pyarrow
+uv run neurogarden connectome fetch            # three files, ~1.1 GB, into ~/.cache/neurogarden/malecns
+uv run neurogarden connectome build            # the central graph; a minute or two
+uv run neurogarden serve                                    # a garden…
+uv run neurogarden flock --brain connectome --count 10      # …and ten connectome flies in it
+uv run neurogarden flock --brain connectome-random --count 3   # and three of the control
+```
+
+`flock` runs N brains in one process, each its own owner (`cns-1` … `cns-10`;
+`rnd-…` for the control, the file's name for `--weights mine.npz`) with its own
+lives, its own stream of chance and its own place in the hall of flies;
+connectome brains share one wiring and are stepped together. The network's
+state carries over from tick to tick, but only as an echo of the last few
+ticks. The speech bubble shows sixteen of the pooled descending features.
+
+Teach your own (`--control SEED` teaches the control instead). Evolution can
+carry on from a taught brain — it breeds the input side too, and writes the
+weights after every generation, so a long run can be stopped — but only in
+small steps, which `evolve --start` takes by itself: at the usual step size the
+lesson wears away within a generation. Whether evolution then improves on the
+lesson is not measured yet.
+
+```bash
+uv run neurogarden distil --out mine.npz --rounds 8 --lives 8 --seed 1   # the shipped lesson: ten minutes
+uv run neurogarden evolve --start mine.npz --out bred.npz --generations 10 --max-steps 1500
+uv run neurogarden flock --weights mine.npz --count 5       # owners mine-1 … mine-5
+```
+
+On a CPU one update of the central graph costs a few milliseconds per fly:
+ten flies in a 5 ticks/s world think for about 62 ms of each 200 ms tick and
+miss none. The full graph is a GPU job: the same model runs on torch when it
+is installed (`backend="torch"`); see the roadmap.
 
 ## Quick start: the dojo
 

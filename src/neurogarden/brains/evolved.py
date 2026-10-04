@@ -10,6 +10,7 @@ in Drosoville is in the weights, and the weights came from lifespans.
 from __future__ import annotations
 
 import json
+import zipfile
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -84,27 +85,11 @@ class Genome:
     def load(cls, source) -> tuple[Genome, dict]:
         """From a path, or anything with `open("rb")` (a packaged resource). ValueError for
         a file that is not a brain of this shape."""
-        name = str(source) if isinstance(source, str | Path) else getattr(source, "name", source)
-        try:
-            if hasattr(source, "open") and not isinstance(source, Path):
-                with source.open("rb") as handle, np.load(handle) as data:
-                    genome, meta = cls._unpack(data, name)
-            else:
-                with np.load(source) as data:
-                    genome, meta = cls._unpack(data, name)
-        except (KeyError, ValueError, TypeError, OSError) as err:
-            if isinstance(err, FileNotFoundError):
-                raise
-            raise ValueError(f"{name}: not an evolved brain's weights ({err})") from None
-        if meta.get("features_version", FEATURES_VERSION) != FEATURES_VERSION:
-            raise ValueError(f"{name}: features_version {meta['features_version']} is not ours")
-        return genome, meta
+        return read_weights(source, "an evolved brain's weights", cls._unpack)
 
     @classmethod
-    def _unpack(cls, data, name: str) -> tuple[Genome, dict]:
-        meta = json.loads(str(data["meta"])) if "meta" in data else {}
-        if not isinstance(meta, dict):
-            raise ValueError("meta is not an object")
+    def _unpack(cls, data) -> tuple[Genome, dict]:
+        meta = weights_meta(data)
         genome = cls(
             *(np.asarray(data[part], dtype=np.float32) for part in ("w1", "b1", "w2", "b2"))
         )
@@ -132,14 +117,113 @@ def scores(genome: Genome, features: np.ndarray) -> np.ndarray:
     return output_scores(genome, hidden_activation(genome, features))
 
 
-def default_weights():
-    """The shipped weights as a packaged resource: readable wherever the package lives."""
-    return resources.files("neurogarden.brains").joinpath("weights", DEFAULT_WEIGHTS)
+def default_weights(name: str = DEFAULT_WEIGHTS):
+    """Shipped weights as a packaged resource: readable wherever the package lives."""
+    return resources.files("neurogarden.brains").joinpath("weights", name)
+
+
+# What numpy raises for a file that is not an .npz of ours: missing arrays, a pickle, a zip
+# cut short, an empty file.
+_NOT_WEIGHTS = (KeyError, ValueError, TypeError, OSError, EOFError, zipfile.BadZipFile)
+
+
+def weights_meta(file) -> dict:
+    """The `meta` of an opened brain file: how it came to be ({} when it does not say)."""
+    meta = json.loads(str(file["meta"])) if "meta" in file else {}
+    if not isinstance(meta, dict):
+        raise ValueError("meta is not an object")
+    return meta
+
+
+def read_weights(source, what: str, unpack):
+    """Open a brain file — a path, or anything with `open("rb")` (a packaged resource) — and
+    `unpack(file)` it into `(genome, meta)`. A file that is not `what` is a ValueError that
+    names it; a file that is not there stays a FileNotFoundError."""
+    name = str(source) if isinstance(source, str | Path) else getattr(source, "name", source)
+    try:
+        if hasattr(source, "open") and not isinstance(source, Path):
+            with source.open("rb") as handle, np.load(handle) as file:
+                genome, meta = unpack(file)
+        else:
+            with np.load(source) as file:
+                genome, meta = unpack(file)
+    except _NOT_WEIGHTS as err:
+        if isinstance(err, FileNotFoundError):
+            raise
+        raise ValueError(f"{name}: not {what} ({err})") from None
+    if meta.get("features_version", FEATURES_VERSION) != FEATURES_VERSION:
+        raise ValueError(f"{name}: features_version {meta['features_version']} is not ours")
+    return genome, meta
+
+
+def weights_kind(path: str | Path) -> str:
+    """Which brain a weights file says it belongs to ("evolved" when it does not say, or
+    cannot be read: that loader then explains why)."""
+    try:
+        with np.load(path) as file:
+            return str(weights_meta(file).get("brain", "evolved"))
+    except _NOT_WEIGHTS:
+        return "evolved"
 
 
 def softmax(values: np.ndarray) -> np.ndarray:
     shifted = np.exp(values - values.max())
     return shifted / shifted.sum()
+
+
+def choose(values: np.ndarray, temperature: float, rng: SplitMix64) -> int:
+    """The action for these scores: the highest at temperature 0, else drawn from the softmax
+    with the brain's own generator, so a life is reproducible from its seed."""
+    if temperature <= 0:
+        return int(np.argmax(values))
+    draw = rng.next_u64() / 2**64
+    picked = np.searchsorted(np.cumsum(softmax(values / temperature)), draw)
+    return int(min(picked, len(values) - 1))
+
+
+def sparkline(values: np.ndarray) -> str:
+    """Activities in [-1, 1] as one glyph each: a brain scope in a speech bubble."""
+    levels = np.clip(((values + 1) / 2 * (len(_SPARKS) - 1)).round(), 0, 7).astype(int)
+    return "".join(_SPARKS[level] for level in levels)
+
+
+@dataclass(frozen=True)
+class MlpTrainable:
+    """What the evolution strategy needs to breed the small network (picklable for workers)."""
+
+    hidden: int = DEFAULT_HIDDEN
+    temperature: float = 0.0
+    kind = "evolved"
+
+    @property
+    def size(self) -> int:
+        return Genome.zeros(self.hidden).size
+
+    def initial(self, rng: np.random.Generator, scale: float = 1.0) -> np.ndarray:
+        """Random weights scaled by 1/sqrt(fan-in): scores that already depend on what is seen."""
+        shape = Genome.zeros(self.hidden)
+        w1 = rng.standard_normal(shape.w1.shape) * scale / np.sqrt(TINY_SIZE)
+        w2 = rng.standard_normal(shape.w2.shape) * scale / np.sqrt(self.hidden)
+        return Genome(w1.astype(np.float32), shape.b1, w2.astype(np.float32), shape.b2).to_vector()
+
+    def genome(self, vector: np.ndarray) -> Genome:
+        return Genome.zeros(self.hidden).with_vector(vector)
+
+    def brain(self, vector: np.ndarray) -> EvolvedBrain:
+        return EvolvedBrain(genome=self.genome(vector), temperature=self.temperature)
+
+    def ready(self) -> None:
+        """Nothing to load: a small network needs no graph."""
+
+    def check_start(self, start, parent: dict | None = None) -> None:
+        if getattr(start, "hidden", None) != self.hidden:
+            raise ValueError(
+                f"the start has {getattr(start, 'hidden', '?')} hidden neurons, "
+                f"the config {self.hidden}"
+            )
+
+    def describe(self) -> dict:
+        return {"brain": self.kind}
 
 
 class EvolvedBrain:
@@ -174,14 +258,17 @@ class EvolvedBrain:
     def act(self, observation: dict[str, np.ndarray]) -> int:
         features = tiny_features(observation, DEFAULT_AGE_SCALE)
         self._hidden = hidden_activation(self.genome, features)
-        values = output_scores(self.genome, self._hidden)
+        return choose(output_scores(self.genome, self._hidden), self.temperature, self._rng)
+
+    def probabilities(self, observation: dict[str, np.ndarray]) -> np.ndarray:
+        """How likely each action is here: what `act` draws from. Nothing of the brain's own
+        life is touched, so it can be asked about a moment another fly is living — which is
+        what makes it a teacher (`dojo.distil`)."""
+        values = scores(self.genome, tiny_features(observation, DEFAULT_AGE_SCALE))
         if self.temperature <= 0:
-            return int(np.argmax(values))
-        draw = self._rng.next_u64() / 2**64  # the brain's own stream: reproducible per seed
-        picked = np.searchsorted(np.cumsum(softmax(values / self.temperature)), draw)
-        return int(min(picked, len(values) - 1))
+            return np.eye(len(values), dtype=np.float32)[int(np.argmax(values))]
+        return softmax(values / self.temperature)
 
     def thought(self) -> str:
         """The hidden layer as a sparkline: a brain scope in a speech bubble."""
-        levels = np.clip(((self._hidden + 1) / 2 * (len(_SPARKS) - 1)).round(), 0, 7).astype(int)
-        return "".join(_SPARKS[level] for level in levels)
+        return sparkline(self._hidden)

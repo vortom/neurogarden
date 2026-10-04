@@ -251,7 +251,10 @@ def test_replay_shows_a_life_frame_by_frame(garden, capsys):
     argv = ["replay", "--archive", path, "--owner", "alice", "--life", "1", "--ascii"]
     assert cli.main([*argv, "--frames", "3", "--fps", "1000"]) == 0
     out = capsys.readouterr().out
-    assert out.count("ghost: alice's") == 3 and ("tick 1 of" in out or "tick 0 of" in out)
+    assert out.count("ghost: alice's") == 3
+    shown = [(int(tick), int(born)) for tick, born in re.findall(r"tick (\d+) of (\d+)–", out)]
+    born = shown[0][1]  # whenever she hatched: a busy machine joins her a tick or two late
+    assert shown == [(born, born), (born + 1, born), (born + 2, born)]
     assert cli.main([*argv, "--fps", "1000"]) == 0  # the whole life, to its last frame
     assert "dies of starvation" in capsys.readouterr().out
     assert cli.main(["replay", "--archive", path, "--owner", "alice", "--life", "7"]) == 1
@@ -289,6 +292,9 @@ def test_verify_checks_the_whole_history(garden, capsys):
 def test_serve_resumes_an_archive_and_refuses_another_seed(garden, capsys, monkeypatch):
     path, ticks = garden
     seen = []
+    archive = cli._open_archive(path)
+    lives = len(archive.lives())  # alice's, and as many as the npc got through meanwhile
+    archive.close()
 
     def announce(server):
         cli.banner(server)
@@ -305,7 +311,7 @@ def test_serve_resumes_an_archive_and_refuses_another_seed(garden, capsys, monke
     out, err = capsys.readouterr()
     assert seen == [(True, ticks)]
     assert "drosoville (seed 3)" in out and f"resumed at tick {ticks}" in out
-    assert "2 lives so far" in out and f"archive: {path}" in out
+    assert f"{lives} lives so far" in out and f"archive: {path}" in out
     assert "seed 3), not drosoville (seed 9)" in err
 
 
@@ -354,8 +360,9 @@ def test_evolve_writes_weights_that_join_can_fly(tmp_path, capsys):
     assert cli.main(argv) == 0
     printed = capsys.readouterr().out
     assert "evolving a 3-neuron brain" in printed and "gen   1/1" in printed and "wrote" in printed
-    assert cli.main([*argv, "--start", out, "--out", str(tmp_path / "again.npz")]) == 0
-    capsys.readouterr()
+    again = str(tmp_path / "again.npz")
+    assert cli.main([*argv, "--start", out, "--out", again, "--sigma", "0.3"]) == 0
+    assert "sigma 0.3, learning rate 0.05, born at dawn" in capsys.readouterr().out
 
     from neurogarden.engine import Config
 
@@ -378,7 +385,6 @@ def test_evolve_writes_weights_that_join_can_fly(tmp_path, capsys):
     assert "for --brain evolved" in capsys.readouterr().err
     assert cli.main(["join", "--weights", str(tmp_path / "nope.npz"), "--owner", "x"]) == 1
     assert "No such file" in capsys.readouterr().err  # --weights alone means evolved
-    again = str(tmp_path / "again.npz")
     assert (
         cli.main(
             [
@@ -401,10 +407,38 @@ def test_evolve_writes_weights_that_join_can_fly(tmp_path, capsys):
         )
         == 0
     )
-    assert "evolving a 3-neuron brain" in capsys.readouterr().out  # inherited from --start
+    printed = capsys.readouterr().out  # the shape and the step size: inherited from --start
+    assert "evolving a 3-neuron brain" in printed and "sigma 0.3" in printed
     assert (
         cli.main(["evolve", "--start", again, "--out", out, "--hidden", "5", "--workers", "1"]) == 1
     )
     assert "hidden neurons" in capsys.readouterr().err
     assert cli.main(["evolve", "--out", out, "--population", "3", "--workers", "1"]) == 1
     assert "even" in capsys.readouterr().err
+    assert cli.main(["evolve", "--out", out, "--graph", "full", "--control", "1"]) == 1
+    assert "--graph, --control: only for --brain connectome" in capsys.readouterr().err
+
+
+def test_an_evolve_cut_short_keeps_its_last_finished_generation(tmp_path, capsys, monkeypatch):
+    from neurogarden.brains import Genome
+
+    real = cli.evolve
+
+    def cut_short(config, checkpoint=None, **rest):
+        def keep(result):
+            checkpoint(result)
+            if len(result.history) == 2:
+                raise KeyboardInterrupt
+
+        return real(config, checkpoint=keep, **rest)
+
+    monkeypatch.setattr(cli, "evolve", cut_short)
+    argv = [
+        "evolve", "--out", str(tmp_path / "cut"), "--generations", "5", "--population", "2",
+        "--episodes", "1", "--max-steps", "20", "--hidden", "3", "--workers", "1", "--seed", "4",
+    ]  # fmt: skip
+    assert cli.main(argv) == 1
+    assert "cut.npz holds generation 2" in capsys.readouterr().err
+    _, meta = Genome.load(tmp_path / "cut.npz")
+    assert meta["generations"] == 2
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["cut.npz"]  # no half-written file
